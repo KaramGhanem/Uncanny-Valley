@@ -60,6 +60,15 @@ import json
 import wandb
 import pickle
 
+from math import sqrt
+from random import random
+import torch
+from torch import nn, einsum
+import torch.nn.functional as F
+
+from tqdm import tqdm
+from einops import rearrange, repeat, reduce
+
 # from math import floor
 # from numpy import ones
 # from numpy import expand_dims
@@ -122,53 +131,6 @@ def save_logs(dictionary, log_dir, exp_id):
   # Log arguments
   with open(os.path.join(log_dir, "args.json"), "w") as f:
     json.dump(dictionary, f, indent=2)
-
-# ##Inception Score
-# # scale an array of images to a new size
-# def scale_images(images, new_shape):
-# 	images_list = list()
-# 	for image in images:
-# 		# resize with nearest neighbor interpolation
-# 		new_image = resize(image, new_shape, 0)
-# 		# store
-# 		images_list.append(new_image)
-# 	return asarray(images_list)
-
-# # assumes images have any shape and pixels in [0,255]
-# def inception_score(images, n_split=10, eps=1E-16):
-# 	# load inception v3 model
-# 	model = InceptionV3_()
-# 	# enumerate splits of images/predictions
-# 	scores = list()
-# 	n_part = floor(images.shape[0] / n_split)
-# 	for i in range(n_split):
-# 		# retrieve images
-# 		ix_start, ix_end = i * n_part, (i+1) * n_part
-# 		subset = images[ix_start:ix_end]
-# 		# convert from uint8 to float32
-# 		#subset = subset.astype('float32')
-# 		# scale images to the required size
-# 		subset = scale_images(subset, (299,299,3))
-# 		# pre-process images, scale to [-1,1]
-# 		subset = preprocess_input(subset)
-# 		# predict p(y|x)
-# 		p_yx = model.predict(subset)
-# 		# calculate p(y)
-# 		p_y = expand_dims(p_yx.mean(axis=0), 0)
-# 		# calculate KL divergence using log probabilities
-# 		kl_d = p_yx * (log(p_yx + eps) - log(p_y + eps))
-# 		# sum over classes
-# 		sum_kl_d = kl_d.sum(axis=1)
-# 		# average over images
-# 		avg_kl_d = mean(sum_kl_d)
-# 		# undo the log
-# 		is_score = exp(avg_kl_d)
-# 		# store
-# 		scores.append(is_score)
-# 	# average across images
-# 	is_avg, is_std = mean(scores), std(scores)
-# 	return is_avg, is_std
-
 
 def inception_score(imgs, cuda=True, batch_size=32, resize=False, splits=1):
     """Computes the inception score of the generated images imgs
@@ -597,10 +559,11 @@ def extract(a, t, x_shape):
     out = a.gather(-1, t)
     return out.reshape(b, *((1,) * (len(x_shape) - 1)))
 
-def linear_beta_schedule(timesteps, scale = 1):
+def linear_beta_schedule(timesteps):
     """
     linear schedule, proposed in original ddpm paper
     """
+    scale = 1000 / timesteps
     beta_start = scale * 0.0001
     beta_end = scale * 0.02
     return torch.linspace(beta_start, beta_end, timesteps, dtype = torch.float64)
@@ -647,8 +610,7 @@ class GaussianDiffusion(nn.Module):
         p2_loss_weight_gamma = 0., # p2 loss weight, from https://arxiv.org/abs/2204.00227 - 0 is equivalent to weight of 1 across time - 1. is recommended
         p2_loss_weight_k = 1,
         ddim_sampling_eta = 0.,
-        auto_normalize = True,
-        linear_schedule_scale = 1
+        auto_normalize = True
     ):
         super().__init__()
         assert not (type(self) == GaussianDiffusion and model.channels != model.out_dim)
@@ -674,10 +636,7 @@ class GaussianDiffusion(nn.Module):
         else:
             raise ValueError(f'unknown beta schedule {beta_schedule}')
 
-        if beta_schedule == 'linear':
-            betas = beta_schedule_fn(timesteps, scale = linear_schedule_scale, **schedule_fn_kwargs)
-        else:
-            betas = beta_schedule_fn(timesteps, **schedule_fn_kwargs)
+        betas = beta_schedule_fn(timesteps, **schedule_fn_kwargs)
 
         alphas = 1. - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
@@ -690,7 +649,7 @@ class GaussianDiffusion(nn.Module):
         # sampling related parameters
 
         self.sampling_timesteps = default(sampling_timesteps, timesteps) # default num sampling timesteps to number of timesteps at training
-        
+
         assert self.sampling_timesteps <= timesteps
         self.is_ddim_sampling = self.sampling_timesteps < timesteps
         self.ddim_sampling_eta = ddim_sampling_eta
@@ -957,7 +916,6 @@ class GaussianDiffusion(nn.Module):
         return loss.mean()
 
     def forward(self, img, *args, **kwargs):
-        # import pdb;pdb.set_trace()
         b, c, h, w, device, img_size, = *img.shape, img.device, self.image_size
         assert h == img_size and w == img_size, f'height and width of image must be {img_size}'
         t = torch.randint(0, self.num_timesteps, (b,), device=device).long()
@@ -965,7 +923,262 @@ class GaussianDiffusion(nn.Module):
         img = self.normalize(img)
         return self.p_losses(img, t, *args, **kwargs)
 
-# dataset classes
+# helpers
+
+def exists(val):
+    return val is not None
+
+# tensor helpers
+
+def log(t, eps = 1e-20):
+    return torch.log(t.clamp(min = eps))
+
+# main class
+
+class ElucidatedDiffusion(nn.Module):
+    def __init__(
+        self,
+        net,
+        *,
+        image_size,
+        channels = 3,
+        num_sample_steps = 32, # number of sampling steps
+        sigma_min = 0.002,     # min noise level
+        sigma_max = 80,        # max noise level
+        sigma_data = 0.5,      # standard deviation of data distribution
+        rho = 7,               # controls the sampling schedule
+        P_mean = -1.2,         # mean of log-normal distribution from which noise is drawn for training
+        P_std = 1.2,           # standard deviation of log-normal distribution from which noise is drawn for training
+        S_churn = 30,          # parameters for stochastic sampling - depends on dataset, Table 5 in apper
+        S_tmin = 0.05,
+        S_tmax = 50,
+        S_noise = 1.003,
+    ):
+        super().__init__()
+        assert net.random_or_learned_sinusoidal_cond
+        self.self_condition = net.self_condition
+
+        self.net = net
+
+        # image dimensions
+
+        self.channels = channels
+        self.image_size = image_size
+
+        # parameters
+
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+        self.sigma_data = sigma_data
+
+        self.rho = rho
+
+        self.P_mean = P_mean
+        self.P_std = P_std
+
+        self.num_sample_steps = num_sample_steps  # otherwise known as N in the paper
+
+        self.S_churn = S_churn
+        self.S_tmin = S_tmin
+        self.S_tmax = S_tmax
+        self.S_noise = S_noise
+
+    @property
+    def device(self):
+        return next(self.net.parameters()).device
+
+    # derived preconditioning params - Table 1
+
+    def c_skip(self, sigma):
+        return (self.sigma_data ** 2) / (sigma ** 2 + self.sigma_data ** 2)
+
+    def c_out(self, sigma):
+        return sigma * self.sigma_data * (self.sigma_data ** 2 + sigma ** 2) ** -0.5
+
+    def c_in(self, sigma):
+        return 1 * (sigma ** 2 + self.sigma_data ** 2) ** -0.5
+
+    def c_noise(self, sigma):
+        return log(sigma) * 0.25
+
+    # preconditioned network output
+    # equation (7) in the paper
+
+    def preconditioned_network_forward(self, noised_images, sigma, self_cond = None, clamp = False):
+        batch, device = noised_images.shape[0], noised_images.device
+
+        if isinstance(sigma, float):
+            sigma = torch.full((batch,), sigma, device = device)
+
+        padded_sigma = rearrange(sigma, 'b -> b 1 1 1')
+
+        net_out = self.net(
+            self.c_in(padded_sigma) * noised_images,
+            self.c_noise(sigma),
+            self_cond
+        )
+
+        out = self.c_skip(padded_sigma) * noised_images +  self.c_out(padded_sigma) * net_out
+
+        if clamp:
+            out = out.clamp(-1., 1.)
+
+        return out
+
+    # sampling
+
+    # sample schedule
+    # equation (5) in the paper
+
+    def sample_schedule(self, num_sample_steps = None):
+        num_sample_steps = default(num_sample_steps, self.num_sample_steps)
+
+        N = num_sample_steps
+        inv_rho = 1 / self.rho
+
+        steps = torch.arange(num_sample_steps, device = self.device, dtype = torch.float32)
+        sigmas = (self.sigma_max ** inv_rho + steps / (N - 1) * (self.sigma_min ** inv_rho - self.sigma_max ** inv_rho)) ** self.rho
+
+        sigmas = F.pad(sigmas, (0, 1), value = 0.) # last step is sigma value of 0.
+        return sigmas
+
+    @torch.no_grad()
+    def sample(self, batch_size = 16, num_sample_steps = None, clamp = True):
+        num_sample_steps = default(num_sample_steps, self.num_sample_steps)
+
+        shape = (batch_size, self.channels, self.image_size, self.image_size)
+
+        # get the schedule, which is returned as (sigma, gamma) tuple, and pair up with the next sigma and gamma
+
+        sigmas = self.sample_schedule(num_sample_steps)
+
+        gammas = torch.where(
+            (sigmas >= self.S_tmin) & (sigmas <= self.S_tmax),
+            min(self.S_churn / num_sample_steps, sqrt(2) - 1),
+            0.
+        )
+
+        sigmas_and_gammas = list(zip(sigmas[:-1], sigmas[1:], gammas[:-1]))
+
+        # images is noise at the beginning
+
+        init_sigma = sigmas[0]
+
+        images = init_sigma * torch.randn(shape, device = self.device)
+
+        # for self conditioning
+
+        x_start = None
+
+        # gradually denoise
+
+        for sigma, sigma_next, gamma in tqdm(sigmas_and_gammas, desc = 'sampling time step'):
+            sigma, sigma_next, gamma = map(lambda t: t.item(), (sigma, sigma_next, gamma))
+
+            eps = self.S_noise * torch.randn(shape, device = self.device) # stochastic sampling
+
+            sigma_hat = sigma + gamma * sigma
+            images_hat = images + sqrt(sigma_hat ** 2 - sigma ** 2) * eps
+
+            self_cond = x_start if self.self_condition else None
+
+            model_output = self.preconditioned_network_forward(images_hat, sigma_hat, self_cond, clamp = clamp)
+            denoised_over_sigma = (images_hat - model_output) / sigma_hat
+
+            images_next = images_hat + (sigma_next - sigma_hat) * denoised_over_sigma
+
+            # second order correction, if not the last timestep
+
+            if sigma_next != 0:
+                self_cond = model_output if self.self_condition else None
+
+                model_output_next = self.preconditioned_network_forward(images_next, sigma_next, self_cond, clamp = clamp)
+                denoised_prime_over_sigma = (images_next - model_output_next) / sigma_next
+                images_next = images_hat + 0.5 * (sigma_next - sigma_hat) * (denoised_over_sigma + denoised_prime_over_sigma)
+
+            images = images_next
+            x_start = model_output_next if sigma_next != 0 else model_output
+
+        images = images.clamp(-1., 1.)
+        return unnormalize_to_zero_to_one(images)
+
+    @torch.no_grad()
+    def sample_using_dpmpp(self, batch_size = 16, num_sample_steps = None):
+        """
+        thanks to Katherine Crowson (https://github.com/crowsonkb) for figuring it all out!
+        https://arxiv.org/abs/2211.01095
+        """
+
+        device, num_sample_steps = self.device, default(num_sample_steps, self.num_sample_steps)
+
+        sigmas = self.sample_schedule(num_sample_steps)
+
+        shape = (batch_size, self.channels, self.image_size, self.image_size)
+        images  = sigmas[0] * torch.randn(shape, device = device)
+
+        sigma_fn = lambda t: t.neg().exp()
+        t_fn = lambda sigma: sigma.log().neg()
+
+        old_denoised = None
+        for i in tqdm(range(len(sigmas) - 1)):
+            denoised = self.preconditioned_network_forward(images, sigmas[i].item())
+            t, t_next = t_fn(sigmas[i]), t_fn(sigmas[i + 1])
+            h = t_next - t
+
+            if not exists(old_denoised) or sigmas[i + 1] == 0:
+                denoised_d = denoised
+            else:
+                h_last = t - t_fn(sigmas[i - 1])
+                r = h_last / h
+                gamma = - 1 / (2 * r)
+                denoised_d = (1 - gamma) * denoised + gamma * old_denoised
+
+            images = (sigma_fn(t_next) / sigma_fn(t)) * images - (-h).expm1() * denoised_d
+            old_denoised = denoised
+
+        images = images.clamp(-1., 1.)
+        return unnormalize_to_zero_to_one(images)
+
+    # training
+
+    def loss_weight(self, sigma):
+        return (sigma ** 2 + self.sigma_data ** 2) * (sigma * self.sigma_data) ** -2
+
+    def noise_distribution(self, batch_size):
+        return (self.P_mean + self.P_std * torch.randn((batch_size,), device = self.device)).exp()
+
+    def forward(self, images):
+        batch_size, c, h, w, device, image_size, channels = *images.shape, images.device, self.image_size, self.channels
+
+        assert h == image_size and w == image_size, f'height and width of image must be {image_size}'
+        assert c == channels, 'mismatch of image channels'
+
+        images = normalize_to_neg_one_to_one(images)
+
+        sigmas = self.noise_distribution(batch_size)
+        padded_sigmas = rearrange(sigmas, 'b -> b 1 1 1')
+
+        noise = torch.randn_like(images)
+
+        noised_images = images + padded_sigmas * noise  # alphas are 1. in the paper
+
+        self_cond = None
+
+        if self.self_condition and random() < 0.5:
+            # from hinton's group's bit diffusion paper
+            with torch.no_grad():
+                self_cond = self.preconditioned_network_forward(noised_images, sigmas)
+                self_cond.detach_()
+
+        denoised = self.preconditioned_network_forward(noised_images, sigmas, self_cond)
+
+        losses = F.mse_loss(denoised, images, reduction = 'none')
+        losses = reduce(losses, 'b ... -> b', 'mean')
+
+        losses = losses * self.loss_weight(sigmas)
+
+        return losses.mean()
+
 
 class Dataset(Dataset):
     def __init__(
@@ -1076,7 +1289,7 @@ class Trainer(object):
         self.image_size = diffusion_model.image_size
 
         # dataset and dataloader
-
+        
         self.ds = Dataset(folder, self.image_size, augment_horizontal_flip = augment_horizontal_flip, convert_image_to = convert_image_to)
         dl = DataLoader(self.ds, batch_size = train_batch_size, shuffle = True, pin_memory = True, num_workers = cpu_count())
 
@@ -1175,10 +1388,8 @@ class Trainer(object):
 
                 total_loss = 0.
 
-                data_list = []
                 for _ in range(self.gradient_accumulate_every):
                     data = next(self.dl).to(device)
-                    data_list.append(data)
 
                     with self.accelerator.autocast():
                         loss = self.model(data)
@@ -1209,42 +1420,42 @@ class Trainer(object):
 
                         with torch.no_grad():
                             milestone = self.step // self.save_and_sample_every
-                        #     batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
-                        #     all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
+                            batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
+                            all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
 
-                        # all_images = torch.cat(all_images_list, dim = 0)
+                        all_images = torch.cat(all_images_list, dim = 0)
                         
                         results_folder_temp = Path(f"{str(self.results_folder)}/{milestone}-folder")
                         results_folder_temp.mkdir(exist_ok = True)
 
-                        # for count,image in enumerate(all_images_list):
-                        #     for c,i in enumerate(image):
-                        #         utils.save_image(i, f"{str(self.results_folder)}/{milestone}-folder/sample-{milestone}-{c}.png")
+                        for count,image in enumerate(all_images_list):
+                            for c,i in enumerate(image):
+                                utils.save_image(i, f"{str(self.results_folder)}/{milestone}-folder/sample-{milestone}-{c}.png")
 
-                        # utils.save_image(all_images, f"{str(self.results_folder)}/sample-{milestone}.png", nrow = int(math.sqrt(self.num_samples)))
+                        utils.save_image(all_images, f"{str(self.results_folder)}/sample-{milestone}.png", nrow = int(math.sqrt(self.num_samples)))
                         self.save(milestone)
 
 
-                        # # whether to calculate fid
+                        # whether to calculate fid
 
-                        # if exists(self.inception_v3):
-                        #     fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
-                        #     inception_score_val = inception_score(all_images, cuda=True, batch_size=16, resize=True, splits=10)
-                        #     fls_score = compute_metrics(train=self.fls_train_path, test=self.fls_test_path, gen=f"{str(self.results_folder)}/{milestone}-folder")
-                        #     accelerator.print(f'fid_score: {fid_score}')
-                        #     accelerator.print(f'inception_score: {inception_score_val}')
-                        #     accelerator.print(f'fls_score: {fls_score}')
-                        #     wandb.log({"fid_score": fid_score})
-                        #     wandb.log({"inception_score_mean": inception_score_val[0]})
-                        #     wandb.log({"inception_score_std": inception_score_val[1]})
-                        #     wandb.log({"fls_score": fls_score})
-                        #     fid_score_list.append(fid_score)
-                        #     inception_score_list.append(inception_score_val)
-                        #     fls_score_list.append(fls_score)
+                        if exists(self.inception_v3):
+                            fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
+                            inception_score_val = inception_score(all_images, cuda=True, batch_size=16, resize=True, splits=10)
+                            fls_score = compute_metrics(train=self.fls_train_path, test=self.fls_test_path, gen=f"{str(self.results_folder)}/{milestone}-folder")
+                            accelerator.print(f'fid_score: {fid_score}')
+                            accelerator.print(f'inception_score: {inception_score_val}')
+                            accelerator.print(f'fls_score: {fls_score}')
+                            wandb.log({"fid_score": fid_score})
+                            wandb.log({"inception_score_mean": inception_score_val[0]})
+                            wandb.log({"inception_score_std": inception_score_val[1]})
+                            wandb.log({"fls_score": fls_score})
+                            fid_score_list.append(fid_score)
+                            inception_score_list.append(inception_score_val)
+                            fls_score_list.append(fls_score)
 
                 pbar.update(1)
 
-        # np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
+        np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
         np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
         np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
 
@@ -1283,11 +1494,9 @@ class Trainer(object):
             with tqdm(initial = self.step, total = self.sampling_steps, disable = not accelerator.is_main_process) as pbar:
                             
                 self.ema.ema_model.eval()
-                
-                data_list = []
+
                 for _ in range(self.gradient_accumulate_every):
-                    data = next(self.dl).to(device)
-                    data_list.append(data)
+                    data_real = next(self.dl).to(device)
 
                 with torch.no_grad():
                     milestone = self.step // self.save_and_sample_every
@@ -1302,31 +1511,30 @@ class Trainer(object):
                 for count,image in enumerate(all_images_list):
                     for c,i in enumerate(image):
                         utils.save_image(i, f"{str(results_folder_temp)}/sample-{milestone}-{c}.png")
-                
-                #Saves images as Grid
+
                 #utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
 
                 # whether to calculate fid
 
                 if exists(self.inception_v3):
-                    # fid_score = self.fid_score(real_samples = data_real, fake_samples = all_images)
+                    fid_score = self.fid_score(real_samples = data_real, fake_samples = all_images)
                     inception_score_val = inception_score(all_images, cuda=True, batch_size=16, resize=True, splits=10)
                     fls_score = compute_metrics(train=self.fls_train_path, test=self.fls_test_path, gen=str(results_folder_temp) ) 
-                    # accelerator.print(f'fid_score: {fid_score}')
+                    accelerator.print(f'fid_score: {fid_score}')
                     accelerator.print(f'inception_score: {inception_score_val}')
                     accelerator.print(f'fls_score: {fls_score}')
-                    # wandb.log({"fid_score": fid_score})
-                    # wandb.log({"inception_score": inception_score_val})
+                    wandb.log({"fid_score": fid_score})
+                    wandb.log({"inception_score": inception_score_val})
                     wandb.log({"inception_score_mean": inception_score_val[0]})
                     wandb.log({"inception_score_std": inception_score_val[1]})
                     wandb.log({"fls_score": fls_score})
-                    # fid_score_list.append(fid_score)
+                    fid_score_list.append(fid_score)
                     inception_score_list.append(inception_score_val)
                     fls_score_list.append(fls_score)
 
                 pbar.update(1)
 
-            # np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
+            np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
             np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
             np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
             np.save(f"{str(self.results_folder)}/fls_score.npy", np.array(fls_score_list)) 
@@ -1356,28 +1564,27 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser() #check parser
     parser.add_argument("--experiment_name", type=str, default="base")
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--train_lr", type=float, default=10e-4)
-    parser.add_argument("--train_num_steps", type=int, default=5000) 
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--train_lr", type=float, default=1e-4)
+    parser.add_argument("--train_num_steps", type=int, default=15000) 
     parser.add_argument("--loss_type", type=str, default="l1")
     parser.add_argument("--beta_schedule", type=str, default="sigmoid")
-    parser.add_argument("--timesteps", type=int, default=5000)
-    parser.add_argument("--sampling_timesteps", type=int, default=500)
+    parser.add_argument("--timesteps", type=int, default=12000)
+    parser.add_argument("--sampling_timesteps", type=int, default=32) #works differently in Elucidated Diffusion Models
     parser.add_argument("--resnet_block_groups", type=int, default=8)
     parser.add_argument("--learned_sinusoidal_dim", type=int, default=16)
     parser.add_argument("--adam_betas", type=tuple, default=(0.9, 0.99))
     parser.add_argument("--p2_loss_weight_gamma", type=float, default=0.)
     parser.add_argument("--p2_loss_weight_k", type=int, default=1)
     parser.add_argument("--ddim_sampling_eta", type=float, default=0.)
-    parser.add_argument("--ema_decay", type=float, default=0.999)
+    parser.add_argument("--ema_decay", type=float, default=0.995)
     parser.add_argument("--ema_update_every", type=int, default=10)
-    parser.add_argument("--save_and_sample_every", type=int, default=1000) #turn back to 500
+    parser.add_argument("--save_and_sample_every", type=int, default=2500) 
     parser.add_argument("--data_path", type=str, default="/Users/dblab/Desktop/minDiffusion/data/MNIST Dataset JPG format/train")
     parser.add_argument("--channels", type=int, default=3)
-    parser.add_argument("--fls_train_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_train")
-    parser.add_argument("--fls_test_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_test")
+    parser.add_argument("--fls_train_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar_big/cifar_train")
+    parser.add_argument("--fls_test_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar_big/cifar_test")
     parser.add_argument("--milestone_path", type=str, default=" ") # will give an error if not specified
-    parser.add_argument("--scaling_factor", type=int, default=1) # will give an error if not specified
     
     #Add attention heads
     #Add different optimizers 
@@ -1386,6 +1593,10 @@ if __name__ == "__main__":
     #Unet
     #Sampling
     #GaussianDiffusion
+
+    #batch size and the optimizer are solver, not decisive for what were investigating 
+    #Understand the difference between the solver and what is being solved
+    #Primary and Secondary features of quantiative approach
 
     #check diffusion model papers
 
@@ -1397,29 +1608,30 @@ if __name__ == "__main__":
         channels = config.channels,
         resnet_block_groups = config.resnet_block_groups,
         learned_variance = False,
-        learned_sinusoidal_cond = False,
+        learned_sinusoidal_cond = True,
         random_fourier_features = False,
         learned_sinusoidal_dim = 16
     )
 
-    ddpm = GaussianDiffusion(
+    elucidated =  ElucidatedDiffusion(
         model,
-        image_size = 32,
-        timesteps = config.timesteps,
-        sampling_timesteps = config.sampling_timesteps, #if not set, it is set to the number of time steps
-        loss_type = config.loss_type,
-        objective = 'pred_noise',
-        beta_schedule = config.beta_schedule,
-        schedule_fn_kwargs = dict(),
-        p2_loss_weight_gamma = config.p2_loss_weight_gamma, # p2 loss weight, from https://arxiv.org/abs/2204.00227 - 0 is equivalent to weight of 1 across time - 1. is recommended
-        p2_loss_weight_k = config.p2_loss_weight_k,
-        ddim_sampling_eta = config.ddim_sampling_eta,
-        auto_normalize = True,
-        linear_schedule_scale = config.scaling_factor
+        image_size = 28,
+        channels = 3,
+        num_sample_steps = 32, # number of sampling steps
+        sigma_min = 0.002,     # min noise level
+        sigma_max = 80,        # max noise level
+        sigma_data = 0.5,      # standard deviation of data distribution
+        rho = 7,               # controls the sampling schedule
+        P_mean = -1.2,         # mean of log-normal distribution from which noise is drawn for training
+        P_std = 1.2,           # standard deviation of log-normal distribution from which noise is drawn for training
+        S_churn = 80,          # parameters for stochastic sampling - depends on dataset, Table 5 in apper
+        S_tmin = 0.05,
+        S_tmax = 50,
+        S_noise = 1.003,
     )
 
     trainer = Trainer(
-        ddpm,
+        elucidated,
         folder = config.data_path,
         train_batch_size = 32,
         train_lr = config.train_lr,
@@ -1433,8 +1645,7 @@ if __name__ == "__main__":
         sampling_steps = config.sampling_timesteps,
         milestone_path = config.milestone_path,
         fls_train_path = config.fls_train_path,
-        fls_test_path = config.fls_test_path,
-        num_samples = 10000
+        fls_test_path = config.fls_test_path
     )
 
     wandb.init(
@@ -1443,14 +1654,23 @@ if __name__ == "__main__":
     
     # track hyperparameters and run metadata
     config={
-    "architecture": "DDPM",
+    "architecture": "Elucidated Diffusion",
+    "dataset": "CIFAR-10",
     "training steps": config.train_num_steps,
     "sampling steps": config.sampling_timesteps,
     "time steps": config.timesteps
     }
     )   
 
-    trainer.train()
+    for i in range(4):
+        log_dict = {
+            "train/step": i 
+        }
+        wandb.log(log_dict)
 
+    
+
+    trainer.train()
+ç
 
 

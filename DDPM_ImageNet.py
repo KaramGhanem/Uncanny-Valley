@@ -19,6 +19,7 @@ from torchvision.datasets import MNIST
 from torchvision.datasets import CIFAR10
 from torchvision import transforms
 from torchvision.utils import save_image, make_grid
+from torchvision.datasets import ImageNet
 
 #DDPM imports
 import math
@@ -168,6 +169,12 @@ def save_logs(dictionary, log_dir, exp_id):
 # 	# average across images
 # 	is_avg, is_std = mean(scores), std(scores)
 # 	return is_avg, is_std
+
+# def collate_fn(batch):
+#   return {
+#       'pixel_values': torch.stack([x['pixel_values'] for x in batch]),
+#       'labels': torch.tensor([x['labels'] for x in batch])
+# }
 
 
 def inception_score(imgs, cuda=True, batch_size=32, resize=False, splits=1):
@@ -475,7 +482,8 @@ class Unet(nn.Module):
         learned_variance = False,
         learned_sinusoidal_cond = False,
         random_fourier_features = False,
-        learned_sinusoidal_dim = 16
+        learned_sinusoidal_dim = 16,
+        dropout = 0
     ):
         super().__init__()
 
@@ -483,6 +491,11 @@ class Unet(nn.Module):
 
         self.channels = channels
         self.self_condition = self_condition
+        self.dropout = dropout
+
+        if self.dropout != 0:
+            self.training = True
+
         input_channels = channels * (2 if self_condition else 1)
 
         init_dim = default(init_dim, dim)
@@ -555,7 +568,9 @@ class Unet(nn.Module):
             x_self_cond = default(x_self_cond, lambda: torch.zeros_like(x))
             x = torch.cat((x_self_cond, x), dim = 1)
 
-        x = self.init_conv(x)
+        #x = self.init_conv(x)
+        x = self.init_conv(torch.nn.functional.dropout(x, p=self.dropout, training=self.training))
+
         r = x.clone()
 
         t = self.time_mlp(time)
@@ -597,10 +612,11 @@ def extract(a, t, x_shape):
     out = a.gather(-1, t)
     return out.reshape(b, *((1,) * (len(x_shape) - 1)))
 
-def linear_beta_schedule(timesteps, scale = 1):
+def linear_beta_schedule(timesteps):
     """
     linear schedule, proposed in original ddpm paper
     """
+    scale = 1000 / timesteps
     beta_start = scale * 0.0001
     beta_end = scale * 0.02
     return torch.linspace(beta_start, beta_end, timesteps, dtype = torch.float64)
@@ -647,8 +663,7 @@ class GaussianDiffusion(nn.Module):
         p2_loss_weight_gamma = 0., # p2 loss weight, from https://arxiv.org/abs/2204.00227 - 0 is equivalent to weight of 1 across time - 1. is recommended
         p2_loss_weight_k = 1,
         ddim_sampling_eta = 0.,
-        auto_normalize = True,
-        linear_schedule_scale = 1
+        auto_normalize = True
     ):
         super().__init__()
         assert not (type(self) == GaussianDiffusion and model.channels != model.out_dim)
@@ -674,10 +689,7 @@ class GaussianDiffusion(nn.Module):
         else:
             raise ValueError(f'unknown beta schedule {beta_schedule}')
 
-        if beta_schedule == 'linear':
-            betas = beta_schedule_fn(timesteps, scale = linear_schedule_scale, **schedule_fn_kwargs)
-        else:
-            betas = beta_schedule_fn(timesteps, **schedule_fn_kwargs)
+        betas = beta_schedule_fn(timesteps, **schedule_fn_kwargs)
 
         alphas = 1. - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
@@ -690,7 +702,7 @@ class GaussianDiffusion(nn.Module):
         # sampling related parameters
 
         self.sampling_timesteps = default(sampling_timesteps, timesteps) # default num sampling timesteps to number of timesteps at training
-        
+
         assert self.sampling_timesteps <= timesteps
         self.is_ddim_sampling = self.sampling_timesteps < timesteps
         self.ddim_sampling_eta = ddim_sampling_eta
@@ -923,7 +935,7 @@ class GaussianDiffusion(nn.Module):
         noise = default(noise, lambda: torch.randn_like(x_start))
 
         # noise sample
-
+        # import pdb; pdb.set_trace()
         x = self.q_sample(x_start = x_start, t = t, noise = noise)
 
         # if doing self-conditioning, 50% of the time, predict x_start from current set of times
@@ -957,7 +969,6 @@ class GaussianDiffusion(nn.Module):
         return loss.mean()
 
     def forward(self, img, *args, **kwargs):
-        # import pdb;pdb.set_trace()
         b, c, h, w, device, img_size, = *img.shape, img.device, self.image_size
         assert h == img_size and w == img_size, f'height and width of image must be {img_size}'
         t = torch.randint(0, self.num_timesteps, (b,), device=device).long()
@@ -972,7 +983,7 @@ class Dataset(Dataset):
         self,
         folder,
         image_size,
-        exts = ['jpg', 'jpeg', 'png', 'tiff'],
+        exts = ['jpg', 'jpeg', 'png', 'tiff','JPEG','JPG','PNG','TIFF'],
         augment_horizontal_flip = False,
         convert_image_to = None
     ):
@@ -1031,7 +1042,7 @@ class Trainer(object):
     ):
         super().__init__()
 
-        if milestone_path is not " ":
+        if milestone_path != " ":
             self.milestone_path = milestone_path
         else:
             self.milestone_path = None
@@ -1076,9 +1087,9 @@ class Trainer(object):
         self.image_size = diffusion_model.image_size
 
         # dataset and dataloader
-
-        self.ds = Dataset(folder, self.image_size, augment_horizontal_flip = augment_horizontal_flip, convert_image_to = convert_image_to)
-        dl = DataLoader(self.ds, batch_size = train_batch_size, shuffle = True, pin_memory = True, num_workers = cpu_count())
+        # self.ds = Dataset(folder, self.image_size, augment_horizontal_flip = augment_horizontal_flip, convert_image_to = convert_image_to)
+        self.ds = ImageNet(root=folder, split='train', transform=transforms.Compose([transforms.Resize(256), transforms.CenterCrop(224), transforms.ToTensor()]))
+        dl = DataLoader(self.ds, batch_size = train_batch_size, shuffle = True, pin_memory = True, num_workers = 6) # num_workers = cpu_count()
 
         dl = self.accelerator.prepare(dl)
         self.dl = cycle(dl)
@@ -1175,10 +1186,13 @@ class Trainer(object):
 
                 total_loss = 0.
 
-                data_list = []
                 for _ in range(self.gradient_accumulate_every):
-                    data = next(self.dl).to(device)
-                    data_list.append(data)
+                    data, labels  = next(self.dl)
+                    # for data_val in data:   
+                    #     if torch.cuda.is_available():
+                    #         data = data_val.to(device) 
+                    data = data.to(device) 
+                    # data = data.to(device)
 
                     with self.accelerator.autocast():
                         loss = self.model(data)
@@ -1209,42 +1223,42 @@ class Trainer(object):
 
                         with torch.no_grad():
                             milestone = self.step // self.save_and_sample_every
-                        #     batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
-                        #     all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
+                            batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
+                            all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
 
-                        # all_images = torch.cat(all_images_list, dim = 0)
+                        all_images = torch.cat(all_images_list, dim = 0)
                         
                         results_folder_temp = Path(f"{str(self.results_folder)}/{milestone}-folder")
                         results_folder_temp.mkdir(exist_ok = True)
 
-                        # for count,image in enumerate(all_images_list):
-                        #     for c,i in enumerate(image):
-                        #         utils.save_image(i, f"{str(self.results_folder)}/{milestone}-folder/sample-{milestone}-{c}.png")
+                        for count,image in enumerate(all_images_list):
+                            for c,i in enumerate(image):
+                                utils.save_image(i, f"{str(self.results_folder)}/{milestone}-folder/sample-{milestone}-{c}.png")
 
-                        # utils.save_image(all_images, f"{str(self.results_folder)}/sample-{milestone}.png", nrow = int(math.sqrt(self.num_samples)))
+                        utils.save_image(all_images, f"{str(self.results_folder)}/sample-{milestone}.png", nrow = int(math.sqrt(self.num_samples)))
                         self.save(milestone)
 
 
-                        # # whether to calculate fid
+                        # whether to calculate fid
 
-                        # if exists(self.inception_v3):
-                        #     fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
-                        #     inception_score_val = inception_score(all_images, cuda=True, batch_size=16, resize=True, splits=10)
-                        #     fls_score = compute_metrics(train=self.fls_train_path, test=self.fls_test_path, gen=f"{str(self.results_folder)}/{milestone}-folder")
-                        #     accelerator.print(f'fid_score: {fid_score}')
-                        #     accelerator.print(f'inception_score: {inception_score_val}')
-                        #     accelerator.print(f'fls_score: {fls_score}')
-                        #     wandb.log({"fid_score": fid_score})
-                        #     wandb.log({"inception_score_mean": inception_score_val[0]})
-                        #     wandb.log({"inception_score_std": inception_score_val[1]})
-                        #     wandb.log({"fls_score": fls_score})
-                        #     fid_score_list.append(fid_score)
-                        #     inception_score_list.append(inception_score_val)
-                        #     fls_score_list.append(fls_score)
+                        if exists(self.inception_v3):
+                            fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
+                            inception_score_val = inception_score(all_images, cuda=True, batch_size=16, resize=True, splits=10)
+                            fls_score = compute_metrics(train=self.fls_train_path, test=self.fls_test_path, gen=f"{str(self.results_folder)}/{milestone}-folder")
+                            accelerator.print(f'fid_score: {fid_score}')
+                            accelerator.print(f'inception_score: {inception_score_val}')
+                            accelerator.print(f'fls_score: {fls_score}')
+                            wandb.log({"fid_score": fid_score})
+                            wandb.log({"inception_score_mean": inception_score_val[0]})
+                            wandb.log({"inception_score_std": inception_score_val[1]})
+                            wandb.log({"fls_score": fls_score})
+                            fid_score_list.append(fid_score)
+                            inception_score_list.append(inception_score_val)
+                            fls_score_list.append(fls_score)
 
                 pbar.update(1)
 
-        # np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
+        np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
         np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
         np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
 
@@ -1283,7 +1297,7 @@ class Trainer(object):
             with tqdm(initial = self.step, total = self.sampling_steps, disable = not accelerator.is_main_process) as pbar:
                             
                 self.ema.ema_model.eval()
-                
+
                 data_list = []
                 for _ in range(self.gradient_accumulate_every):
                     data = next(self.dl).to(device)
@@ -1302,8 +1316,7 @@ class Trainer(object):
                 for count,image in enumerate(all_images_list):
                     for c,i in enumerate(image):
                         utils.save_image(i, f"{str(results_folder_temp)}/sample-{milestone}-{c}.png")
-                
-                #Saves images as Grid
+
                 #utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
 
                 # whether to calculate fid
@@ -1377,7 +1390,6 @@ if __name__ == "__main__":
     parser.add_argument("--fls_train_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_train")
     parser.add_argument("--fls_test_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_test")
     parser.add_argument("--milestone_path", type=str, default=" ") # will give an error if not specified
-    parser.add_argument("--scaling_factor", type=int, default=1) # will give an error if not specified
     
     #Add attention heads
     #Add different optimizers 
@@ -1399,12 +1411,13 @@ if __name__ == "__main__":
         learned_variance = False,
         learned_sinusoidal_cond = False,
         random_fourier_features = False,
-        learned_sinusoidal_dim = 16
+        learned_sinusoidal_dim = 16,
+        dropout = 0.13
     )
 
     ddpm = GaussianDiffusion(
         model,
-        image_size = 32,
+        image_size = 224,
         timesteps = config.timesteps,
         sampling_timesteps = config.sampling_timesteps, #if not set, it is set to the number of time steps
         loss_type = config.loss_type,
@@ -1415,7 +1428,6 @@ if __name__ == "__main__":
         p2_loss_weight_k = config.p2_loss_weight_k,
         ddim_sampling_eta = config.ddim_sampling_eta,
         auto_normalize = True,
-        linear_schedule_scale = config.scaling_factor
     )
 
     trainer = Trainer(
@@ -1444,6 +1456,7 @@ if __name__ == "__main__":
     # track hyperparameters and run metadata
     config={
     "architecture": "DDPM",
+    "dataset": "ImageNet",
     "training steps": config.train_num_steps,
     "sampling steps": config.sampling_timesteps,
     "time steps": config.timesteps
