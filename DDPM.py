@@ -1377,7 +1377,7 @@ if __name__ == "__main__":
     parser.add_argument("--fls_train_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_train")
     parser.add_argument("--fls_test_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_test")
     parser.add_argument("--milestone_path", type=str, default=" ") # will give an error if not specified
-    parser.add_argument("--scaling_factor", type=int, default=1) # will give an error if not specified
+    parser.add_argument("--scaling_factor", type=float, default=1) # will give an error if not specified
     
     #Add attention heads
     #Add different optimizers 
