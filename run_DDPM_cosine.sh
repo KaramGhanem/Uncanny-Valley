@@ -26,7 +26,7 @@ module load cuda/11.7
 
 # python /home/mila/k/karam.ghanem/scratch/Diffusion/minDiffusion/DDPM.py --channel 3 --save_and_sample_every 625 --train_num_steps 3125 --sampling_timesteps 1000 --timesteps 1000 --experiment_name Langevin_Sampler_cosine_schedule_CIFAR10 --beta_schedule 'sigmoid' --data_path '/home/mila/k/karam.ghanem/scratch/Diffusion/cifar10_png/train'
 
-python /home/mila/k/karam.ghanem/scratch/Diffusion/minDiffusion/DDPM.py --channel 3 --save_and_sample_every 15625 --train_num_steps 156250 --sampling_timesteps 1000 --timesteps 1000 --experiment_name Langevin_Sampler_sigmoid_schedule_CIFAR10 --beta_schedule 'cosine' --data_path '/home/mila/k/karam.ghanem/scratch/Diffusion/cifar10_png/train'
+python /home/mila/k/karam.ghanem/scratch/Diffusion/minDiffusion/DDPM.py --channel 3 --save_and_sample_every 15625 --train_num_steps 156250 --sampling_timesteps 1000 --timesteps 1000 --experiment_name DDPM_cosine_schedule_CIFAR10 --beta_schedule 'cosine' --data_path '/home/mila/k/karam.ghanem/scratch/Diffusion/cifar10_png/train'
 
 # 5. Copy whatever you want to save on $SCRATCH
 cp $SLURM_TMPDIR  /network/scratch/k/karam.ghanem
