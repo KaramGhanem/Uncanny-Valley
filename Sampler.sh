@@ -27,3 +27,5 @@ python /home/mila/k/karam.ghanem/Diffusion/minDiffusion/DDPM.py --channel 3  --s
 
 # 5. Copy whatever you want to save on $SCRATCH
 cp $SLURM_TMPDIR  /network/scratch/k/karam.ghanem
+
+
