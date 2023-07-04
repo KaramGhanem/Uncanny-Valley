@@ -1,28 +1,4 @@
-"""
-Extremely Minimalistic Implementation of DDPM
-
-https://arxiv.org/abs/2006.11239
-
-Everything is self contained. (Except for pytorch and torchvision... of course)
-
-run it with `python superminddpm.py`
-"""
-
-from typing import Dict, Tuple
-from tqdm import tqdm
-
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-
-from torchvision.datasets import MNIST
-from torchvision.datasets import CIFAR10
-from torchvision import transforms
-from torchvision.utils import save_image, make_grid
-
-#DDPM imports
 import math
-import os
 import copy
 from pathlib import Path
 from random import random
@@ -36,7 +12,6 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 from torch.optim import Adam
-
 from torchvision import transforms as T, utils
 
 from einops import rearrange, reduce
@@ -47,189 +22,26 @@ from tqdm.auto import tqdm
 from ema_pytorch import EMA
 
 from accelerate import Accelerator
+import argparse
+import numpy as np
 
 from pytorch_fid.inception import InceptionV3
 from pytorch_fid.fid_score import calculate_frechet_distance
 
-from torchvision.datasets import MNIST
+import tensorflow as tf
 import numpy as np
+
+
 from version import __version__
-#tiny diffusion ddpm imports
-import argparse
-import json
-import wandb
-import pickle
 
-# from math import floor
-# from numpy import ones
-# from numpy import expand_dims
-# from numpy import log
-# from numpy import mean
-# from numpy import std
-# from numpy import exp
-# from numpy.random import shuffle
-# from keras.applications.inception_v3 import InceptionV3 as InceptionV3_
-# from keras.applications.inception_v3 import preprocess_input
-# from keras.datasets import cifar10
-# from skimage.transform import resize
-# from numpy import asarray
+# import tensorflow.compat.v1 as tf
+# tf.disable_v2_behavior()
 
-
-import torch
-from torch import nn
-from torch.autograd import Variable
-from torch.nn import functional as F
-import torch.utils.data
-
-from torchvision.models.inception import inception_v3
-
-import numpy as np
-from scipy.stats import entropy
-
-from fls.utils import compute_metrics
-
-import numpy as np
-from scipy.stats import entropy
-
-# from torch.utils import distributed as dist
-
-#DDPM Ho et al.
-# constants
-
+tf.compat.v1.disable_eager_execution()
+# tf.disable_v1_behavior()
 ModelPrediction =  namedtuple('ModelPrediction', ['pred_noise', 'pred_x_start'])
 
 # helpers functions
-
-def get_logger(model):
-  logger = dict()
-#   logger['train_time'] = [0]
-#   logger['eval_time'] = [0]
-#   logger['train_losses'] = []
-#   logger['GPU_Usage'] = []
-  logger['FID'] = []
-  #logger['parameters'] = sum([p.numel() for p in model.back_bone.parameters() if p.requires_grad])
-  return logger
-
-def put_in_dictionary(FID):
-#   logger["total_train_loss"] = train_loss
-#   logger["total_train_time"] = train_time
-#   logger["final_eval_loss"] = eval_loss
-#   logger['train_time'] = logger['train_time'][1:]
-#   logger['eval_time'] = logger['eval_time'][1:]
-    logger["FID"] = FID
-
-def save_logs(dictionary, log_dir, exp_id):
-  log_dir = os.path.join(log_dir, exp_id)
-  os.makedirs(log_dir, exist_ok=True)
-  # Log arguments
-  with open(os.path.join(log_dir, "args.json"), "w") as f:
-    json.dump(dictionary, f, indent=2)
-
-# ##Inception Score
-# # scale an array of images to a new size
-# def scale_images(images, new_shape):
-# 	images_list = list()
-# 	for image in images:
-# 		# resize with nearest neighbor interpolation
-# 		new_image = resize(image, new_shape, 0)
-# 		# store
-# 		images_list.append(new_image)
-# 	return asarray(images_list)
-
-# # assumes images have any shape and pixels in [0,255]
-# def inception_score(images, n_split=10, eps=1E-16):
-# 	# load inception v3 model
-# 	model = InceptionV3_()
-# 	# enumerate splits of images/predictions
-# 	scores = list()
-# 	n_part = floor(images.shape[0] / n_split)
-# 	for i in range(n_split):
-# 		# retrieve images
-# 		ix_start, ix_end = i * n_part, (i+1) * n_part
-# 		subset = images[ix_start:ix_end]
-# 		# convert from uint8 to float32
-# 		#subset = subset.astype('float32')
-# 		# scale images to the required size
-# 		subset = scale_images(subset, (299,299,3))
-# 		# pre-process images, scale to [-1,1]
-# 		subset = preprocess_input(subset)
-# 		# predict p(y|x)
-# 		p_yx = model.predict(subset)
-# 		# calculate p(y)
-# 		p_y = expand_dims(p_yx.mean(axis=0), 0)
-# 		# calculate KL divergence using log probabilities
-# 		kl_d = p_yx * (log(p_yx + eps) - log(p_y + eps))
-# 		# sum over classes
-# 		sum_kl_d = kl_d.sum(axis=1)
-# 		# average over images
-# 		avg_kl_d = mean(sum_kl_d)
-# 		# undo the log
-# 		is_score = exp(avg_kl_d)
-# 		# store
-# 		scores.append(is_score)
-# 	# average across images
-# 	is_avg, is_std = mean(scores), std(scores)
-# 	return is_avg, is_std
-
-
-def inception_score(imgs, cuda=True, batch_size=32, resize=False, splits=1):
-    """Computes the inception score of the generated images imgs
-    imgs -- Torch dataset of (3xHxW) numpy images normalized in the range [-1, 1]
-    cuda -- whether or not to run on GPU
-    batch_size -- batch size for feeding into Inception v3
-    splits -- number of splits
-    """
-    N = len(imgs)
-
-    assert batch_size > 0
-    assert N > batch_size
-
-    # Set up dtype
-    if cuda:
-        dtype = torch.cuda.FloatTensor
-    else:
-        if torch.cuda.is_available():
-            print("WARNING: You have a CUDA device, so you should probably set cuda=True")
-        dtype = torch.FloatTensor
-
-    # Set up dataloader
-    dataloader = torch.utils.data.DataLoader(imgs, batch_size=batch_size)
-
-    # Load inception model
-    inception_model = inception_v3(pretrained=True, transform_input=False).type(dtype)
-    inception_model.eval();
-    up = nn.Upsample(size=(299, 299), mode='bilinear').type(dtype)
-    def get_pred(x):
-        if resize:
-            x = up(x)
-        x = inception_model(x)
-        return F.softmax(x).data.cpu().numpy()
-
-    # Get predictions
-    preds = np.zeros((N, 1000))
-
-    for i, batch in enumerate(dataloader, 0):
-        batch = batch.type(dtype)
-        batchv = Variable(batch)
-        batch_size_i = batch.size()[0]
-
-        preds[i*batch_size:i*batch_size + batch_size_i] = get_pred(batchv)
-
-    # Now compute the mean kl-div
-    split_scores = []
-
-    for k in range(splits):
-        part = preds[k * (N // splits): (k+1) * (N // splits), :]
-        py = np.mean(part, axis=0)
-        scores = []
-        for i in range(part.shape[0]):
-            pyx = part[i, :]
-            scores.append(entropy(pyx, py))
-        split_scores.append(np.exp(np.mean(scores)))
-
-    return np.mean(split_scores), np.std(split_scores)
-
-
 
 def exists(x):
     return x is not None
@@ -571,6 +383,7 @@ class Unet(nn.Module):
             x = block2(x, t)
             x = attn(x)
             h.append(x)
+
             x = downsample(x)
 
         x = self.mid_block1(x, t)
@@ -599,10 +412,11 @@ def extract(a, t, x_shape):
     out = a.gather(-1, t)
     return out.reshape(b, *((1,) * (len(x_shape) - 1)))
 
-def linear_beta_schedule(timesteps, scale = 1):
+def linear_beta_schedule(timesteps):
     """
     linear schedule, proposed in original ddpm paper
     """
+    scale = 1000 / timesteps
     beta_start = scale * 0.0001
     beta_end = scale * 0.02
     return torch.linspace(beta_start, beta_end, timesteps, dtype = torch.float64)
@@ -633,14 +447,16 @@ def sigmoid_beta_schedule(timesteps, start = -3, end = 3, tau = 1, clamp_min = 1
     alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
     betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
     return torch.clip(betas, 0, 0.999)
+    
 
+    
 class GaussianDiffusion(nn.Module):
     def __init__(
         self,
         model,
         *,
         image_size,
-        timesteps = 10000,
+        timesteps = 1000,
         sampling_timesteps = None,
         loss_type = 'l1',
         objective = 'pred_noise',
@@ -649,15 +465,13 @@ class GaussianDiffusion(nn.Module):
         p2_loss_weight_gamma = 0., # p2 loss weight, from https://arxiv.org/abs/2204.00227 - 0 is equivalent to weight of 1 across time - 1. is recommended
         p2_loss_weight_k = 1,
         ddim_sampling_eta = 0.,
-        auto_normalize = True,
-        linear_schedule_scale = 1
+        auto_normalize = True
     ):
         super().__init__()
         assert not (type(self) == GaussianDiffusion and model.channels != model.out_dim)
         assert not model.random_or_learned_sinusoidal_cond
 
         self.model = model
-
         self.channels = self.model.channels
         self.self_condition = self.model.self_condition
 
@@ -676,10 +490,7 @@ class GaussianDiffusion(nn.Module):
         else:
             raise ValueError(f'unknown beta schedule {beta_schedule}')
 
-        if beta_schedule == 'linear':
-            betas = beta_schedule_fn(timesteps, scale = linear_schedule_scale, **schedule_fn_kwargs)
-        else:
-            betas = beta_schedule_fn(timesteps, **schedule_fn_kwargs)
+        betas = beta_schedule_fn(timesteps, **schedule_fn_kwargs)
 
         alphas = 1. - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
@@ -692,7 +503,7 @@ class GaussianDiffusion(nn.Module):
         # sampling related parameters
 
         self.sampling_timesteps = default(sampling_timesteps, timesteps) # default num sampling timesteps to number of timesteps at training
-        
+
         assert self.sampling_timesteps <= timesteps
         self.is_ddim_sampling = self.sampling_timesteps < timesteps
         self.ddim_sampling_eta = ddim_sampling_eta
@@ -759,8 +570,6 @@ class GaussianDiffusion(nn.Module):
             extract(self.sqrt_alphas_cumprod, t, x_t.shape) * x_t -
             extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape) * v
         )
-    
-
 
     def q_posterior(self, x_start, x_t, t):
         posterior_mean = (
@@ -771,7 +580,7 @@ class GaussianDiffusion(nn.Module):
         posterior_log_variance_clipped = extract(self.posterior_log_variance_clipped, t, x_t.shape)
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
-    def model_predictions(self, x, t, x_self_cond = None, clip_x_start = False, rederive_pred_noise = False):
+    def model_predictions(self, x, t, x_self_cond = None, clip_x_start = False):
         model_output = self.model(x, t, x_self_cond)
         maybe_clip = partial(torch.clamp, min = -1., max = 1.) if clip_x_start else identity
 
@@ -779,9 +588,6 @@ class GaussianDiffusion(nn.Module):
             pred_noise = model_output
             x_start = self.predict_start_from_noise(x, t, pred_noise)
             x_start = maybe_clip(x_start)
-
-            if clip_x_start and rederive_pred_noise:
-                pred_noise = self.predict_noise_from_start(x, t, x_start)
 
         elif self.objective == 'pred_x0':
             x_start = model_output
@@ -805,19 +611,41 @@ class GaussianDiffusion(nn.Module):
 
         model_mean, posterior_variance, posterior_log_variance = self.q_posterior(x_start = x_start, x_t = x, t = t)
         return model_mean, posterior_variance, posterior_log_variance, x_start
+     
+    def condition_mean(self, cond_fn, mean,variance, x, t, guidance_kwargs=None):
+        """
+        Compute the mean for the previous step, given a function cond_fn that
+        computes the gradient of a conditional log probability with respect to
+        x. In particular, cond_fn computes grad(log(p(y|x))), and we want to
+        condition on y.
+        This uses the conditioning strategy from Sohl-Dickstein et al. (2015).
+        """
 
+        x = np.reshape(x,  (25, 3*28*28))
+        gradient = cond_fn(x, t, guidance_kwargs)
+        new_mean = (
+            mean.float() + variance * gradient.float()
+        )
+        print("gradient: ",(variance * gradient.float()).mean())
+        return new_mean
+
+        
     @torch.no_grad()
-    def p_sample(self, x, t: int, x_self_cond = None):
+    def p_sample(self, x, t: int, x_self_cond = None, cond_fn=None, guidance_kwargs=None):
         b, *_, device = *x.shape, x.device
         batched_times = torch.full((b,), t, device = x.device, dtype = torch.long)
-        model_mean, _, model_log_variance, x_start = self.p_mean_variance(x = x, t = batched_times, x_self_cond = x_self_cond, clip_denoised = True)
+        model_mean, variance, model_log_variance, x_start = self.p_mean_variance(
+            x = x, t = batched_times, x_self_cond = x_self_cond, clip_denoised = True
+        )
+        if exists(cond_fn) and exists(guidance_kwargs):
+            model_mean = self.condition_mean(cond_fn, model_mean, variance, x, batched_times, guidance_kwargs)
+        
         noise = torch.randn_like(x) if t > 0 else 0. # no noise if t == 0
         pred_img = model_mean + (0.5 * model_log_variance).exp() * noise
         return pred_img, x_start
-        
 
     @torch.no_grad()
-    def p_sample_loop(self, shape, return_all_timesteps = False):
+    def p_sample_loop(self, shape, return_all_timesteps = False, cond_fn=None, guidance_kwargs=None):
         batch, device = shape[0], self.betas.device
 
         img = torch.randn(shape, device = device)
@@ -827,7 +655,7 @@ class GaussianDiffusion(nn.Module):
 
         for t in tqdm(reversed(range(0, self.num_timesteps)), desc = 'sampling loop time step', total = self.num_timesteps):
             self_cond = x_start if self.self_condition else None
-            img, x_start = self.p_sample(img, t, self_cond)
+            img, x_start = self.p_sample(img, t, self_cond, cond_fn, guidance_kwargs)
             imgs.append(img)
 
         ret = img if not return_all_timesteps else torch.stack(imgs, dim = 1)
@@ -836,9 +664,8 @@ class GaussianDiffusion(nn.Module):
         return ret
 
     @torch.no_grad()
-    def ddim_sample(self, shape, return_all_timesteps = False):
+    def ddim_sample(self, shape, return_all_timesteps = False, cond_fn=None, guidance_kwargs=None):
         batch, device, total_timesteps, sampling_timesteps, eta, objective = shape[0], self.betas.device, self.num_timesteps, self.sampling_timesteps, self.ddim_sampling_eta, self.objective
-
         times = torch.linspace(-1, total_timesteps - 1, steps = sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
         times = list(reversed(times.int().tolist()))
         time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
@@ -851,11 +678,12 @@ class GaussianDiffusion(nn.Module):
         for time, time_next in tqdm(time_pairs, desc = 'sampling loop time step'):
             time_cond = torch.full((batch,), time, device = device, dtype = torch.long)
             self_cond = x_start if self.self_condition else None
-            pred_noise, x_start, *_ = self.model_predictions(img, time_cond, self_cond, clip_x_start = True, rederive_pred_noise = True)
+            pred_noise, x_start, *_ = self.model_predictions(img, time_cond, self_cond, clip_x_start = True)
+
+            imgs.append(img)
 
             if time_next < 0:
                 img = x_start
-                imgs.append(img)
                 continue
 
             alpha = self.alphas_cumprod[time]
@@ -870,18 +698,16 @@ class GaussianDiffusion(nn.Module):
                   c * pred_noise + \
                   sigma * noise
 
-            imgs.append(img)
-
         ret = img if not return_all_timesteps else torch.stack(imgs, dim = 1)
 
         ret = self.unnormalize(ret)
         return ret
 
     @torch.no_grad()
-    def sample(self, batch_size = 16, return_all_timesteps = False):
+    def sample(self, batch_size = 16, return_all_timesteps = False, cond_fn=None, guidance_kwargs=None):
         image_size, channels = self.image_size, self.channels
         sample_fn = self.p_sample_loop if not self.is_ddim_sampling else self.ddim_sample
-        return sample_fn((batch_size, channels, image_size, image_size), return_all_timesteps = return_all_timesteps)
+        return sample_fn((batch_size, channels, image_size, image_size), return_all_timesteps = return_all_timesteps, cond_fn=cond_fn, guidance_kwargs=guidance_kwargs)
 
     @torch.no_grad()
     def interpolate(self, x1, x2, t = None, lam = 0.5):
@@ -959,7 +785,6 @@ class GaussianDiffusion(nn.Module):
         return loss.mean()
 
     def forward(self, img, *args, **kwargs):
-        # import pdb;pdb.set_trace()
         b, c, h, w, device, img_size, = *img.shape, img.device, self.image_size
         assert h == img_size and w == img_size, f'height and width of image must be {img_size}'
         t = torch.randint(0, self.num_timesteps, (b,), device=device).long()
@@ -1001,6 +826,137 @@ class Dataset(Dataset):
         img = Image.open(path)
         return self.transform(img)
 
+#Trainer Class
+  
+# class Classifier(nn.Module):
+#     def __init__(self):
+#         self.x_input = tf.compat.v1.placeholder(tf.float32, shape = [None, 784])
+#         self.y_input = tf.compat.v1.placeholder(tf.int64, shape = [None])
+
+#         self.x_image = tf.reshape(self.x_input, [-1, 28, 28, 1])
+
+#         # first convolutional layer
+#         W_conv1 = self._weight_variable([5,5,1,32])
+#         b_conv1 = self._bias_variable([32])
+
+#         h_conv1 = tf.nn.relu(self._conv2d(self.x_image, W_conv1) + b_conv1)
+#         h_pool1 = self._max_pool_2x2(h_conv1)
+
+#         # second convolutional layer
+#         W_conv2 = self._weight_variable([5,5,32,64])
+#         b_conv2 = self._bias_variable([64])
+
+#         h_conv2 = tf.nn.relu(self._conv2d(h_pool1, W_conv2) + b_conv2)
+#         h_pool2 = self._max_pool_2x2(h_conv2)
+
+#         # first fully connected layer
+#         W_fc1 = self._weight_variable([7 * 7 * 64, 1024])
+#         b_fc1 = self._bias_variable([1024])
+
+#         h_pool2_flat = tf.reshape(h_pool2, [-1, 7 * 7 * 64])
+#         h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, W_fc1) + b_fc1)
+
+#         # output layer
+#         W_fc2 = self._weight_variable([1024,10])
+#         b_fc2 = self._bias_variable([10])
+
+#         self.pre_softmax = tf.matmul(h_fc1, W_fc2) + b_fc2
+
+#         y_xent = tf.nn.sparse_softmax_cross_entropy_with_logits(
+#             labels=self.y_input, logits=self.pre_softmax)
+
+#         self.xent = tf.reduce_sum(y_xent)
+
+#         self.y_pred = tf.argmax(self.pre_softmax, 1)
+
+#         correct_prediction = tf.equal(self.y_pred, self.y_input)
+
+#         self.num_correct = tf.reduce_sum(tf.cast(correct_prediction, tf.int64))
+#         self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+
+#     @staticmethod
+#     def _weight_variable(shape):
+#         initial = tf.random.truncated_normal(shape, stddev=0.1)
+#         return tf.Variable(initial)
+
+#     @staticmethod
+#     def _bias_variable(shape):
+#         initial = tf.constant(0.1, shape = shape)
+#         return tf.Variable(initial)
+
+#     @staticmethod
+#     def _conv2d(x, W):
+#         return tf.nn.conv2d(x, W, strides=[1,1,1,1], padding='SAME')
+
+#     @staticmethod
+#     def _max_pool_2x2( x):
+#         return tf.nn.max_pool(x,
+#                                 ksize = [1,2,2,1],
+#                                 strides=[1,2,2,1],
+#                                 padding='SAME')
+    
+def classifier_cond_fn(x, t, classifier, y, classifier_scale=1):
+    """
+    return the graident of the classifier outputing y wrt x.
+    formally expressed as d_log(classifier(x, t)) / dx
+    """
+    assert y is not None
+    with torch.enable_grad():
+        x_in = x.detach().requires_grad_(True)
+        logits = classifier(x_in, t)
+        log_probs = F.log_softmax(logits, dim=-1)
+        selected = log_probs[range(len(logits)), y.view(-1)]
+        grad = torch.autograd.grad(selected.sum(), x_in)[0] * classifier_scale
+        return grad
+        
+class LinfPGDAttack:
+    def __init__(self, model, epsilon, k, a, random_start, loss_func):
+        """Attack parameter initialization. The attack performs k steps of
+        size a, while always staying within epsilon from the initial
+        point."""
+        self.model = model
+        self.epsilon = epsilon
+        self.k = k
+        self.a = a
+        self.rand = random_start
+
+        if loss_func == 'xent':
+            loss = model.xent
+        elif loss_func == 'cw':
+            label_mask = tf.one_hot(model.y_input,
+                                    10,
+                                    on_value=1.0,
+                                    off_value=0.0,
+                                    dtype=tf.float32)
+            correct_logit = tf.reduce_sum(label_mask * model.pre_softmax, axis=1)
+            wrong_logit = tf.reduce_max((1-label_mask) * model.pre_softmax
+                                        - 1e4*label_mask, axis=1)
+            loss = -tf.nn.relu(correct_logit - wrong_logit + 50)
+        else:
+            print('Unknown loss function. Defaulting to cross-entropy')
+            loss = model.xent
+
+            self.grad = tf.gradients(loss, model.x_input)[0]
+
+    def perturb(self, x_nat, y, sess):
+        """Given a set of examples (x_nat, y), returns a set of adversarial
+        examples within epsilon of x_nat in l_infinity norm."""
+        if self.rand:
+            x = x_nat + np.random.uniform(-self.epsilon, self.epsilon, x_nat.shape)
+            x = np.clip(x, 0, 1) # ensure valid pixel range
+        else:
+            x = np.copy(x_nat)
+
+        for i in range(self.k):
+            grad = sess.run(self.grad, feed_dict={self.model.x_input: x,
+                                                    self.model.y_input: y})
+
+            x += self.a * np.sign(grad)
+
+            x = np.clip(x, x_nat - self.epsilon, x_nat + self.epsilon) 
+            x = np.clip(x, 0, 1) # ensure valid pixel range
+
+        return x
 # trainer class
 
 class Trainer(object):
@@ -1009,6 +965,7 @@ class Trainer(object):
         diffusion_model,
         folder,
         *,
+        classifier,
         train_batch_size = 16,
         gradient_accumulate_every = 1,
         augment_horizontal_flip = True,
@@ -1017,32 +974,17 @@ class Trainer(object):
         ema_update_every = 10,
         ema_decay = 0.995,
         adam_betas = (0.9, 0.99),
-        save_and_sample_every = 500,
+        save_and_sample_every = 1000,
         num_samples = 25,
         results_folder = './results',
         amp = False,
         fp16 = False,
         split_batches = True,
-        convert_image_to = None,
         calculate_fid = True,
-        inception_block_idx = 2048,
-        milestone_path,
-        sampling_steps,
-        fls_train_path,
-        fls_test_path,
+        convert_image_to = None,
+        inception_block_idx = 2048
     ):
         super().__init__()
-
-        if milestone_path is not " ":
-            self.milestone_path = milestone_path
-        else:
-            self.milestone_path = None
-
-        self.sampling_steps = sampling_steps
-        self.fls_train_path = fls_train_path
-        self.fls_test_path = fls_test_path
-
-        # accelerator
 
         self.accelerator = Accelerator(
             split_batches = split_batches,
@@ -1050,9 +992,7 @@ class Trainer(object):
         )
 
         self.accelerator.native_amp = amp
-
-        # model
-
+        self.classifier = classifier
         self.model = diffusion_model
 
         # InceptionV3 for fid-score computation
@@ -1063,9 +1003,7 @@ class Trainer(object):
             assert inception_block_idx in InceptionV3.BLOCK_INDEX_BY_DIM
             block_idx = InceptionV3.BLOCK_INDEX_BY_DIM[inception_block_idx]
             self.inception_v3 = InceptionV3([block_idx])
-            self.inception_v3.to(self.device)
-
-        # sampling and training hyperparameters
+            #self.inception_v3.to(self.device)
 
         assert has_int_squareroot(num_samples), 'number of samples must have an integer square root'
         self.num_samples = num_samples
@@ -1093,7 +1031,6 @@ class Trainer(object):
 
         if self.accelerator.is_main_process:
             self.ema = EMA(diffusion_model, beta = ema_decay, update_every = ema_update_every)
-            self.ema.to(self.device)
 
         self.results_folder = Path(results_folder)
         self.results_folder.mkdir(exist_ok = True)
@@ -1105,10 +1042,6 @@ class Trainer(object):
         # prepare model, dataloader, optimizer with accelerator
 
         self.model, self.opt = self.accelerator.prepare(self.model, self.opt)
-
-    @property
-    def device(self):
-        return self.accelerator.device
 
     def save(self, milestone):
         if not self.accelerator.is_local_main_process:
@@ -1165,201 +1098,186 @@ class Trainer(object):
     def train(self):
         accelerator = self.accelerator
         device = accelerator.device
-        accelerator.print(f'device: {device}')
-        fid_score_list = []
-        loss_list = []
-        inception_score_list = []
-        fls_score_list = []
 
-        with tqdm(initial = self.step, total = self.train_num_steps, disable = not accelerator.is_main_process) as pbar:
+        with tf.compat.v1.Session() as self.sess:
+            with tqdm(initial = self.step, total = self.train_num_steps, disable = not accelerator.is_main_process) as pbar:
 
-            while self.step < self.train_num_steps:
+                while self.step < self.train_num_steps:
 
-                total_loss = 0.
+                    total_loss = 0.
 
-                data_list = []
-                for _ in range(self.gradient_accumulate_every):
-                    data = next(self.dl).to(device)
-                    data_list.append(data)
+                    for _ in range(self.gradient_accumulate_every):
+                        data = next(self.dl).to(device)
 
-                    with self.accelerator.autocast():
-                        loss = self.model(data)
-                        loss = loss / self.gradient_accumulate_every
-                        total_loss += loss.item()
+                        with self.accelerator.autocast():
+                            loss = self.model(data)
+                            loss = loss / self.gradient_accumulate_every
+                            total_loss += loss.item()
 
-                    self.accelerator.backward(loss)
+                        self.accelerator.backward(loss)
 
-                accelerator.clip_grad_norm_(self.model.parameters(), 1.0)
-                pbar.set_description(f'loss: {total_loss:.4f}')
-                wandb.log({"total_loss": total_loss})
-                #Take into consideration epochs
-                loss_list.append(total_loss)
+                    accelerator.clip_grad_norm_(self.model.parameters(), 1.0)
+                    pbar.set_description(f'loss: {total_loss:.4f}')
+                    np.save(f"{str(self.results_folder)}/loss.npy", np.array(total_loss)) 
+                    accelerator.wait_for_everyone()
 
-                accelerator.wait_for_everyone()
+                    self.opt.step()
+                    self.opt.zero_grad()
 
-                self.opt.step()
-                self.opt.zero_grad()
+                    accelerator.wait_for_everyone()
 
-                accelerator.wait_for_everyone()
+                    self.step += 1
+                    if accelerator.is_main_process:
+                        self.ema.to(device)
+                        self.ema.update()
 
-                self.step += 1
-                if accelerator.is_main_process:
-                    self.ema.update()
+                        if self.step != 0 and self.step % self.save_and_sample_every == 0:
+                            self.ema.ema_model.eval()
 
-                    if self.step != 0 and self.step % self.save_and_sample_every == 0:
-                        self.ema.ema_model.eval()
+                            with torch.no_grad():
+                                milestone = self.step // self.save_and_sample_every
+                                batches = num_to_groups(self.num_samples, self.batch_size)
+                                all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n, cond_fn=LinfPGDAttack(self.classifier, 0.3, 40, 0.01, True, "grad").perturb, guidance_kwargs=self.sess), batches))
 
-                        with torch.no_grad():
-                            milestone = self.step // self.save_and_sample_every
-                        #     batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
-                        #     all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
+                            all_images = torch.cat(all_images_list, dim = 0)
+                            utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
+                            self.save(milestone)
 
-                        # all_images = torch.cat(all_images_list, dim = 0)
-                        
-                        results_folder_temp = Path(f"{str(self.results_folder)}/{milestone}-folder")
-                        results_folder_temp.mkdir(exist_ok = True)
+                            if exists(self.inception_v3):
+                                fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
+                                accelerator.print(f'fid_score: {fid_score}')
+                                np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score)) 
 
-                        # for count,image in enumerate(all_images_list):
-                        #     for c,i in enumerate(image):
-                        #         utils.save_image(i, f"{str(self.results_folder)}/{milestone}-folder/sample-{milestone}-{c}.png")
+                    pbar.update(1)
 
-                        # utils.save_image(all_images, f"{str(self.results_folder)}/sample-{milestone}.png", nrow = int(math.sqrt(self.num_samples)))
-                        self.save(milestone)
+            accelerator.print('training complete')
 
+if __name__ == '__main__':
+    class Model(object):
+        def __init__(self):
+            self.x_input = tf.compat.v1.placeholder(tf.float32, shape = [None, 2352])
+            self.y_input = tf.compat.v1.placeholder(tf.int64, shape = [None])
 
-                        # # whether to calculate fid
+            self.x_image = tf.reshape(self.x_input, [-1, 28, 28, 3])
 
-                        # if exists(self.inception_v3):
-                        #     fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
-                        #     inception_score_val = inception_score(all_images, cuda=True, batch_size=16, resize=True, splits=10)
-                        #     fls_score = compute_metrics(train=self.fls_train_path, test=self.fls_test_path, gen=f"{str(self.results_folder)}/{milestone}-folder")
-                        #     accelerator.print(f'fid_score: {fid_score}')
-                        #     accelerator.print(f'inception_score: {inception_score_val}')
-                        #     accelerator.print(f'fls_score: {fls_score}')
-                        #     wandb.log({"fid_score": fid_score})
-                        #     wandb.log({"inception_score_mean": inception_score_val[0]})
-                        #     wandb.log({"inception_score_std": inception_score_val[1]})
-                        #     wandb.log({"fls_score": fls_score})
-                        #     fid_score_list.append(fid_score)
-                        #     inception_score_list.append(inception_score_val)
-                        #     fls_score_list.append(fls_score)
+            # first convolutional layer
+            W_conv1 = self._weight_variable([5,5,3,32])
+            b_conv1 = self._bias_variable([32])
 
-                pbar.update(1)
+            h_conv1 = tf.nn.relu(self._conv2d(self.x_image, W_conv1) + b_conv1)
+            h_pool1 = self._max_pool_2x2(h_conv1)
 
-        # np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
-        np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
-        np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
+            # second convolutional layer
+            W_conv2 = self._weight_variable([5,5,32,64])
+            b_conv2 = self._bias_variable([64])
 
-        accelerator.print('training complete')
-    
-    def sampler(self):
-        for i in range(10):
-            accelerator = self.accelerator
-            device = accelerator.device
+            h_conv2 = tf.nn.relu(self._conv2d(h_pool1, W_conv2) + b_conv2)
+            h_pool2 = self._max_pool_2x2(h_conv2)
 
-            accelerator.print(f'device: {device}')
-            # import pdb; pdb.set_trace()
-            data = torch.load(self.milestone_path + f'/model-{i+1}.pt')
+            # first fully connected layer
+            W_fc1 = self._weight_variable([7 * 7 * 64, 1024])
+            b_fc1 = self._bias_variable([1024])
+
+            h_pool2_flat = tf.reshape(h_pool2, [-1, 7 * 7 * 64])
+            h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, W_fc1) + b_fc1)
+
+            # output layer
+            W_fc2 = self._weight_variable([1024,10])
+            b_fc2 = self._bias_variable([10])
+
+            #import pdb; pdb.set_trace()
+            self.pre_softmax = tf.matmul(h_fc1, W_fc2) + b_fc2
+
+            y_xent = tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=self.y_input, logits=self.pre_softmax)
+
+            self.xent = tf.reduce_sum(y_xent)
+
+            self.y_pred = tf.argmax(self.pre_softmax, 1)
+
+            correct_prediction = tf.equal(self.y_pred, self.y_input)
+
+            self.num_correct = tf.reduce_sum(tf.cast(correct_prediction, tf.int64))
+            self.accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
             
 
-            model = self.accelerator.unwrap_model(self.model)
-            model.load_state_dict(data['model'])
+        @staticmethod
+        def _weight_variable(shape):
+            initial = tf.random.truncated_normal(shape, stddev=0.1)
+            return tf.Variable(initial)
 
-            self.step = data['step']
-            self.opt.load_state_dict(data['opt'])
-            self.ema.load_state_dict(data['ema'])
+        @staticmethod
+        def _bias_variable(shape):
+            initial = tf.constant(0.1, shape = shape)
+            return tf.Variable(initial)
 
-            if 'version' in data:
-                print(f"loading from version {data['version']}")
+        @staticmethod
+        def _conv2d(x, W):
+            return tf.nn.conv2d(x, W, strides=[1,1,1,1], padding='SAME')
 
-
-            if exists(self.accelerator.scaler) and exists(data['scaler']):
-                self.accelerator.scaler.load_state_dict(data['scaler'])
-
-            fid_score_list = []
-            loss_list = []
-            inception_score_list = []
-            fls_score_list = []
+        @staticmethod
+        def _max_pool_2x2( x):
+            return tf.nn.max_pool(x,
+                                    ksize = [1,2,2,1],
+                                    strides=[1,2,2,1],
+                                    padding='SAME')
             
+    class LinfPGDAttack:
+        def __init__(self, model, epsilon, k, a, random_start, loss_func):
+            """Attack parameter initialization. The attack performs k steps of
+            size a, while always staying within epsilon from the initial
+            point."""
+            self.model = model
+            self.epsilon = epsilon
+            self.k = k
+            self.a = a
+            self.rand = random_start
 
-            with tqdm(initial = self.step, total = self.sampling_steps, disable = not accelerator.is_main_process) as pbar:
-                            
-                self.ema.ema_model.eval()
-                
-                data_list = []
-                for _ in range(self.gradient_accumulate_every):
-                    data = next(self.dl).to(device)
-                    data_list.append(data)
+            if loss_func == 'xent':
+                loss = model.xent
+            elif loss_func == 'cw':
+                label_mask = tf.one_hot(model.y_input,
+                                        10,
+                                        on_value=1.0,
+                                        off_value=0.0,
+                                        dtype=tf.float32)
+                correct_logit = tf.reduce_sum(label_mask * model.pre_softmax, axis=1)
+                wrong_logit = tf.reduce_max((1-label_mask) * model.pre_softmax
+                                            - 1e4*label_mask, axis=1)
+                loss = -tf.nn.relu(correct_logit - wrong_logit + 50)
+            else:
+                print('Unknown loss function. Defaulting to cross-entropy')
+                loss = model.xent
 
-                with torch.no_grad():
-                    milestone = self.step // self.save_and_sample_every
-                    batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
-                    import pdb;pdb.set_trace()
-                    all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
+                self.grad = tf.gradients(loss, model.x_input)[0]
 
-                all_images = torch.cat(all_images_list, dim = 0)
+        def perturb(self, x_nat, y, sess):
+            """Given a set of examples (x_nat, y), returns a set of adversarial
+            examples within epsilon of x_nat in l_infinity norm."""
+            if self.rand:
+                x = x_nat + np.random.uniform(-self.epsilon, self.epsilon, x_nat.shape)
+                x = np.clip(x, 0, 1) # ensure valid pixel range
+            else:
+                x = np.copy(x_nat)
 
-                results_folder_temp = Path(f"{str(self.results_folder)}/model_{i}")
-                results_folder_temp.mkdir(exist_ok = True)
+            for i in range(self.k):
+                grad = sess.run(self.grad, feed_dict={self.model.x_input: x,
+                                                        self.model.y_input: y})
 
-                for count,image in enumerate(all_images):
-                    utils.save_image(image, f"{str(results_folder_temp)}/sample-{i+1}-{count}.png")
-                
-                #Saves images as Grid
-                #utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
+                x += self.a * np.sign(grad)
 
-                # whether to calculate fid
+                x = np.clip(x, x_nat - self.epsilon, x_nat + self.epsilon) 
+                x = np.clip(x, 0, 1) # ensure valid pixel range
 
-                if exists(self.inception_v3):
-                    # fid_score = self.fid_score(real_samples = data_real, fake_samples = all_images)
-                    inception_score_val = inception_score(all_images, cuda=True, batch_size=16, resize=True, splits=10)
-                    fls_score = compute_metrics(train=self.fls_train_path, test=self.fls_test_path, gen=str(results_folder_temp) ) 
-                    # accelerator.print(f'fid_score: {fid_score}')
-                    accelerator.print(f'inception_score: {inception_score_val}')
-                    accelerator.print(f'fls_score: {fls_score}')
-                    # wandb.log({"fid_score": fid_score})
-                    # wandb.log({"inception_score": inception_score_val})
-                    wandb.log({"inception_score_mean": inception_score_val[0]})
-                    wandb.log({"inception_score_std": inception_score_val[1]})
-                    wandb.log({"fls_score": fls_score})
-                    # fid_score_list.append(fid_score)
-                    inception_score_list.append(inception_score_val)
-                    fls_score_list.append(fls_score)
+            return x
 
-                pbar.update(1)
 
-            # np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
-            # np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
-            # np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
-            # np.save(f"{str(self.results_folder)}/fls_score.npy", np.array(fls_score_list)) 
-
-            accelerator.print('sampling complete')
-
-        
-
-if __name__ == "__main__":
-
-    ## Commands to set environment variable in terminal as to get local MPS GPU to work
-    ## Some torch functions are not fully compatible with MPS GPU 
-    ## If error appears, run in terminal
-
-    ## Use in terminal when asked to set PYTORCH_ENABLE_MPS_FALLBACK=1
-
-    # !echo $HOME
-    # !echo $USER
-    # !PYTORCH_ENABLE_MPS_FALLBACK=1
-    # !echo $PYTORCH_ENABLE_MPS_FALLBACK
-    # !echo $SHELL
-    # !echo "export PYTORCH_ENABLE_MPS_FALLBACK=1" >> ~/.zshrc    
-    # !cat ~/.zshrc   
-    # !source ~/.zshrc 
-    # !printenv  
-    # !env | grep "PYTORCH_ENABLE_MPS_FALLBACK" 
+    classifier = Model()
 
     parser = argparse.ArgumentParser() #check parser
     parser.add_argument("--experiment_name", type=str, default="base")
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--train_lr", type=float, default=10e-4)
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--train_lr", type=float, default=1e-4)
     parser.add_argument("--train_num_steps", type=int, default=5000) 
     parser.add_argument("--loss_type", type=str, default="l1")
     parser.add_argument("--beta_schedule", type=str, default="sigmoid")
@@ -1371,17 +1289,12 @@ if __name__ == "__main__":
     parser.add_argument("--p2_loss_weight_gamma", type=float, default=0.)
     parser.add_argument("--p2_loss_weight_k", type=int, default=1)
     parser.add_argument("--ddim_sampling_eta", type=float, default=0.)
-    parser.add_argument("--ema_decay", type=float, default=0.999)
+    parser.add_argument("--ema_decay", type=float, default=0.995)
     parser.add_argument("--ema_update_every", type=int, default=10)
-    parser.add_argument("--save_and_sample_every", type=int, default=1000) #turn back to 500
+    parser.add_argument("--save_and_sample_every", type=int, default=500)
     parser.add_argument("--data_path", type=str, default="/Users/dblab/Desktop/minDiffusion/data/MNIST Dataset JPG format/train")
     parser.add_argument("--channels", type=int, default=3)
-    parser.add_argument("--fls_train_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_train")
-    parser.add_argument("--fls_test_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_test")
-    parser.add_argument("--milestone_path", type=str, default=" ") # will give an error if not specified
-    parser.add_argument("--scaling_factor", type=float, default=1) # will give an error if not specified
-    parser.add_argument("--local_rank", type=int, default=0)
-    
+
     #Add attention heads
     #Add different optimizers 
     #Add epochs
@@ -1389,6 +1302,11 @@ if __name__ == "__main__":
     #Unet
     #Sampling
     #GaussianDiffusion
+    #parameterization
+
+    #batch size and the optimizer are solver, not decisive for what were investigating 
+    #Understand the difference between the solver and what is being solved
+    #Primary and Secondary features of quantiative approach
 
     #check diffusion model papers
 
@@ -1405,9 +1323,11 @@ if __name__ == "__main__":
         learned_sinusoidal_dim = 16
     )
 
+    image_size = 28 ##change
+
     ddpm = GaussianDiffusion(
         model,
-        image_size = 32,
+        image_size = image_size,
         timesteps = config.timesteps,
         sampling_timesteps = config.sampling_timesteps, #if not set, it is set to the number of time steps
         loss_type = config.loss_type,
@@ -1418,44 +1338,23 @@ if __name__ == "__main__":
         p2_loss_weight_k = config.p2_loss_weight_k,
         ddim_sampling_eta = config.ddim_sampling_eta,
         auto_normalize = True,
-        linear_schedule_scale = config.scaling_factor
     )
 
+    
     trainer = Trainer(
         ddpm,
         folder = config.data_path,
+        classifier = classifier,
         train_batch_size = 32,
         train_lr = config.train_lr,
         train_num_steps = config.train_num_steps,         # total training steps
         gradient_accumulate_every = 2,    # gradient accumulation steps
         results_folder = config.experiment_name + '_results',
         ema_decay = config.ema_decay,                # exponential moving average decay
-        amp = False,                       # turn on mixed precision
+        amp = True,                       # turn on mixed precision
         calculate_fid = True,              # whether to calculate fid during training (does not work with grayscale one channel data)
-        save_and_sample_every = config.save_and_sample_every, # saving model and sampling images every n steps
-        sampling_steps = config.sampling_timesteps,
-        milestone_path = config.milestone_path,
-        fls_train_path = config.fls_train_path,
-        fls_test_path = config.fls_test_path,
-        num_samples = 64
+        save_and_sample_every = config.save_and_sample_every # saving model and sampling images every n steps
     )
 
-    wandb.init(
-    # set the wandb project where this run will be logged
-    project="Diffusion Models",
-    
-    # track hyperparameters and run metadata
-    config={
-    "architecture": "DDPM",
-    "training steps": config.train_num_steps,
-    "sampling steps": config.sampling_timesteps,
-    "time steps": config.timesteps
-    }
-    )   
-
-    # import pdb; pdb.set_trace()
-    # trainer.sampler()
+   
     trainer.train()
-
-
-

@@ -1213,17 +1213,17 @@ class Trainer(object):
                         # whether to calculate fid
 
                         if exists(self.inception_v3):
-                            fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
+                            # fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
                             inception_score_val = inception_score(all_images, cuda=True, batch_size=16, resize=True, splits=10)
                             fls_score = compute_metrics(train=self.fls_train_path, test=self.fls_test_path, gen=f"{str(self.results_folder)}/{milestone}-folder")
-                            accelerator.print(f'fid_score: {fid_score}')
+                            # accelerator.print(f'fid_score: {fid_score}')
                             accelerator.print(f'inception_score: {inception_score_val}')
                             accelerator.print(f'fls_score: {fls_score}')
-                            wandb.log({"fid_score": fid_score})
+                            # wandb.log({"fid_score": fid_score})
                             wandb.log({"inception_score_mean": inception_score_val[0]})
                             wandb.log({"inception_score_std": inception_score_val[1]})
                             wandb.log({"fls_score": fls_score})
-                            fid_score_list.append(fid_score)
+                            # fid_score_list.append(fid_score)
                             inception_score_list.append(inception_score_val)
                             fls_score_list.append(fls_score)
 

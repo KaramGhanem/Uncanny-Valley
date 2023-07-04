@@ -91,6 +91,9 @@ from fls.utils import compute_metrics
 import numpy as np
 from scipy.stats import entropy
 
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
 # from torch.utils import distributed as dist
 
 #DDPM Ho et al.
@@ -1253,12 +1256,12 @@ class Trainer(object):
         accelerator.print('training complete')
     
     def sampler(self):
-        for i in range(10):
+        for i in range(4):
             accelerator = self.accelerator
             device = accelerator.device
 
             accelerator.print(f'device: {device}')
-            # import pdb; pdb.set_trace()
+            
             data = torch.load(self.milestone_path + f'/model-{i+1}.pt')
             
 
@@ -1294,7 +1297,6 @@ class Trainer(object):
                 with torch.no_grad():
                     milestone = self.step // self.save_and_sample_every
                     batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
-                    import pdb;pdb.set_trace()
                     all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
 
                 all_images = torch.cat(all_images_list, dim = 0)
@@ -1302,8 +1304,9 @@ class Trainer(object):
                 results_folder_temp = Path(f"{str(self.results_folder)}/model_{i}")
                 results_folder_temp.mkdir(exist_ok = True)
 
-                for count,image in enumerate(all_images):
-                    utils.save_image(image, f"{str(results_folder_temp)}/sample-{i+1}-{count}.png")
+                for count,image in enumerate(all_images_list):
+                    for c,i in enumerate(image):
+                        utils.save_image(i, f"{str(results_folder_temp)}/sample-{milestone}-{c}.png")
                 
                 #Saves images as Grid
                 #utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
@@ -1329,9 +1332,9 @@ class Trainer(object):
                 pbar.update(1)
 
             # np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
-            # np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
-            # np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
-            # np.save(f"{str(self.results_folder)}/fls_score.npy", np.array(fls_score_list)) 
+            np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
+            np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
+            np.save(f"{str(self.results_folder)}/fls_score.npy", np.array(fls_score_list)) 
 
             accelerator.print('sampling complete')
 
@@ -1394,6 +1397,15 @@ if __name__ == "__main__":
 
     config = parser.parse_args()
 
+    # dist.init_process_group("nccl")
+    # rank = dist.get_rank()
+    # print(f"Start running basic DDP example on rank {rank}.")
+
+    # # create model and move it to GPU with id rank
+    # device_id = rank % torch.cuda.device_count()
+
+    # device_id = rank % torch.cuda.device_count()
+
     model = Unet(
         dim = 64,
         dim_mults = (1, 2, 4),
@@ -1421,6 +1433,8 @@ if __name__ == "__main__":
         linear_schedule_scale = config.scaling_factor
     )
 
+    # ddpm = DDP(model, device_ids=[device_id])
+
     trainer = Trainer(
         ddpm,
         folder = config.data_path,
@@ -1430,32 +1444,32 @@ if __name__ == "__main__":
         gradient_accumulate_every = 2,    # gradient accumulation steps
         results_folder = config.experiment_name + '_results',
         ema_decay = config.ema_decay,                # exponential moving average decay
-        amp = False,                       # turn on mixed precision
+        amp = True,                       # turn on mixed precision
         calculate_fid = True,              # whether to calculate fid during training (does not work with grayscale one channel data)
         save_and_sample_every = config.save_and_sample_every, # saving model and sampling images every n steps
         sampling_steps = config.sampling_timesteps,
         milestone_path = config.milestone_path,
         fls_train_path = config.fls_train_path,
         fls_test_path = config.fls_test_path,
-        num_samples = 64
+        num_samples = 10000
     )
 
-    wandb.init(
-    # set the wandb project where this run will be logged
-    project="Diffusion Models",
-    
-    # track hyperparameters and run metadata
-    config={
-    "architecture": "DDPM",
-    "training steps": config.train_num_steps,
-    "sampling steps": config.sampling_timesteps,
-    "time steps": config.timesteps
-    }
-    )   
-
-    # import pdb; pdb.set_trace()
-    # trainer.sampler()
-    trainer.train()
+    if config.local_rank == 0:  # only on main process
+        wandb.init(
+        # set the wandb project where this run will be logged
+        project="Diffusion Models",
+        
+        # track hyperparameters and run metadata
+        config={
+        "architecture": "DDPM",
+        "training steps": config.train_num_steps,
+        "sampling steps": config.sampling_timesteps,
+        "time steps": config.timesteps
+        }
+        )   
+        trainer.train()
+    else:
+        trainer.train()
 
 
 
