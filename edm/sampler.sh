@@ -37,7 +37,7 @@ conda activate edm
 #    --rdzv_endpoint=$RDV_ADDR\
 #    --standalone\
 #    --nproc_per_node=1\
-#     train.py --outdir=training-runs --data=/home/mila/k/karam.ghanem/scratch/datasets/cifar10/cifar10-32x32.zip --cond=1 --arch=ddpmpp --batch-gpu=32
+#     train.py --outdir=training-runs --data=/network/scratch/k/karam.ghanem/datasets/cifar10/cifar10-32x32.zip --cond=1 --arch=ddpmpp --batch-gpu=32
 # python generate.py
 # python generate_copy.py
 
@@ -54,9 +54,9 @@ conda activate edm
 # python generate_reimplementation_3.py
 # python generate_reimplementation_4.py
 # python generate_Heun_1.py
-python generate_Heun_2.py
-python generate_Heun_3.py
-python generate_Heun_4.py
+# python generate_Heun_2.py
+# python generate_Heun_3.py
+# python generate_Heun_4.py
 python generate_sig_1.py
 python generate_sig_2.py
 python generate_sig_3.py

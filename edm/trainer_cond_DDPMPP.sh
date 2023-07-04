@@ -2,7 +2,7 @@
 
 #SBATCH --partition=main                           # Ask for unkillable job
 #SBATCH --cpus-per-task=8                                # Ask for 8 CPUs
-#SBATCH --gres=gpu:rtx8000:2                                     # Ask for 2 GPU
+#SBATCH --gres=gpu:a100:2                                     # Ask for 2 GPU
 #SBATCH --mem=48G                                        # Ask for 48 GB of RAM
 #SBATCH -o /network/scratch/k/karam.ghanem/slurm-%j.out  # Write the log on scratch
 
@@ -37,13 +37,13 @@ conda activate edm
 #    --rdzv_endpoint=$RDV_ADDR\
 #    --standalone\
 #    --nproc_per_node=1\
-#     train.py --outdir=training-runs --data=/home/mila/k/karam.ghanem/scratch/datasets/cifar10/cifar10-32x32.zip --cond=1 --arch=ddpmpp --batch-gpu=32
+#     train.py --outdir=training-runs --data=/network/scratch/k/karam.ghanem/datasets/cifar10/cifar10-32x32.zip --cond=1 --arch=ddpmpp --batch-gpu=32
 
 #ImageNet
-# torchrun --standalone --nproc_per_node=1 train.py --outdir=training-runs --data=/home/mila/k/karam.ghanem/scratch/datasets/imagenet-64x64.zip --cond=1 --arch=ddpmpp --batch-gpu=32 --snap=10 --dump=10
+# torchrun --standalone --nproc_per_node=1 train.py --outdir=training-runs --data=/network/scratch/k/karam.ghanem/datasets/imagenet-64x64.zip --cond=1 --arch=ddpmpp --batch-gpu=32 --snap=10 --dump=10
 
 #CIFAR10
-torchrun --standalone --nproc_per_node=1 train.py --outdir=training-runs --data=/home/mila/k/karam.ghanem/scratch/datasets/cifar10/cifar10-32x32.zip --cond=1 --arch=ddpmpp --batch=32 --snap=10 --dump=10 
+torchrun --standalone --nproc_per_node=1 train.py --outdir=training-runs --data=/network/scratch/k/karam.ghanem/datasets/cifar10/cifar10-32x32.zip --cond=1 --arch=ddpmpp --batch=32 --snap=10 --dump=10 
 
 
 # 5. Copy whatever you want to save on $SCRATCH
