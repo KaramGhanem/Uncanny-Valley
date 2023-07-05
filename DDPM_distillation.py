@@ -1297,54 +1297,54 @@ class Trainer(object):
 
                         with torch.no_grad():
                             milestone = self.step // self.save_and_sample_every
-                            batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
-                            all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
+                        #     batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
+                        #     all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
 
-                        all_images = torch.cat(all_images_list, dim = 0)
+                        # all_images = torch.cat(all_images_list, dim = 0)
                         
                         results_folder_temp = Path(f"{str(self.results_folder)}/{milestone}-folder")
                         results_folder_temp.mkdir(exist_ok = True)
 
-                        for count,image in enumerate(all_images_list):
-                            for c,i in enumerate(image):
-                                utils.save_image(i, f"{str(self.results_folder)}/{milestone}-folder/sample-{milestone}-{c}.png")
+                        # for count,image in enumerate(all_images_list):
+                        #     for c,i in enumerate(image):
+                        #         utils.save_image(i, f"{str(self.results_folder)}/{milestone}-folder/sample-{milestone}-{c}.png")
 
-                        utils.save_image(all_images, f"{str(self.results_folder)}/sample-{milestone}.png", nrow = int(math.sqrt(self.num_samples)))
+                        # utils.save_image(all_images, f"{str(self.results_folder)}/sample-{milestone}.png", nrow = int(math.sqrt(self.num_samples)))
                         self.save(milestone)
 
 
-                        # whether to calculate fid
+                        # # whether to calculate fid
 
-                        if exists(self.inception_v3):
-                            fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
-                            inception_score_val = inception_score(all_images, cuda=True, batch_size=16, resize=True, splits=10)
-                            fls_score = compute_metrics(train=self.fls_train_path, test=self.fls_test_path, gen=f"{str(self.results_folder)}/{milestone}-folder")
-                            accelerator.print(f'fid_score: {fid_score}')
-                            accelerator.print(f'inception_score: {inception_score_val}')
-                            accelerator.print(f'fls_score: {fls_score}')
-                            wandb.log({"fid_score": fid_score})
-                            wandb.log({"inception_score_mean": inception_score_val[0]})
-                            wandb.log({"inception_score_std": inception_score_val[1]})
-                            wandb.log({"fls_score": fls_score})
-                            fid_score_list.append(fid_score)
-                            inception_score_list.append(inception_score_val)
-                            fls_score_list.append(fls_score)
+                        # if exists(self.inception_v3):
+                        #     fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
+                        #     inception_score_val = inception_score(all_images, cuda=True, batch_size=16, resize=True, splits=10)
+                        #     fls_score = compute_metrics(train=self.fls_train_path, test=self.fls_test_path, gen=f"{str(self.results_folder)}/{milestone}-folder")
+                        #     accelerator.print(f'fid_score: {fid_score}')
+                        #     accelerator.print(f'inception_score: {inception_score_val}')
+                        #     accelerator.print(f'fls_score: {fls_score}')
+                        #     wandb.log({"fid_score": fid_score})
+                        #     wandb.log({"inception_score_mean": inception_score_val[0]})
+                        #     wandb.log({"inception_score_std": inception_score_val[1]})
+                        #     wandb.log({"fls_score": fls_score})
+                        #     fid_score_list.append(fid_score)
+                        #     inception_score_list.append(inception_score_val)
+                        #     fls_score_list.append(fls_score)
 
                 pbar.update(1)
 
-        np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
+        # np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
         np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
         np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
 
         accelerator.print('training complete')
 
     def sampler(self):
-        for i in range(4):
+        for i in range(10):
             accelerator = self.accelerator
             device = accelerator.device
 
             accelerator.print(f'device: {device}')
-            
+            # import pdb; pdb.set_trace()
             data = torch.load(self.milestone_path + f'/model-{i+1}.pt')
             
 
@@ -1380,6 +1380,7 @@ class Trainer(object):
                 with torch.no_grad():
                     milestone = self.step // self.save_and_sample_every
                     batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
+                    # import pdb;pdb.set_trace()
                     all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
 
                 all_images = torch.cat(all_images_list, dim = 0)
@@ -1387,9 +1388,8 @@ class Trainer(object):
                 results_folder_temp = Path(f"{str(self.results_folder)}/model_{i}")
                 results_folder_temp.mkdir(exist_ok = True)
 
-                for count,image in enumerate(all_images_list):
-                    for c,i in enumerate(image):
-                        utils.save_image(i, f"{str(results_folder_temp)}/sample-{milestone}-{c}.png")
+                for count,image in enumerate(all_images):
+                    utils.save_image(image, f"{str(results_folder_temp)}/sample-{i+1}-{count}.png")
 
                 #Saves images as Grid
                 #utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
@@ -1415,14 +1415,15 @@ class Trainer(object):
                 pbar.update(1)
 
             # np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
-            np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
-            np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
-            np.save(f"{str(self.results_folder)}/fls_score.npy", np.array(fls_score_list)) 
+            # np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
+            # np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
+            # np.save(f"{str(self.results_folder)}/fls_score.npy", np.array(fls_score_list)) 
 
             accelerator.print('sampling complete')
         
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
 
     ## Commands to set environment variable in terminal as to get local MPS GPU to work
     ## Some torch functions are not fully compatible with MPS GPU 
@@ -1464,6 +1465,8 @@ if __name__ == '__main__':
     parser.add_argument("--fls_train_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_train")
     parser.add_argument("--fls_test_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_test")
     parser.add_argument("--milestone_path", type=str, default=" ") # will give an error if not specified
+    parser.add_argument("--scaling_factor", type=float, default=1) # will give an error if not specified
+    parser.add_argument("--local_rank", type=int, default=0)
     
     #Add attention heads
     #Add different optimizers 
@@ -1472,10 +1475,6 @@ if __name__ == '__main__':
     #Unet
     #Sampling
     #GaussianDiffusion
-
-    #batch size and the optimizer are solver, not decisive for what were investigating 
-    #Understand the difference between the solver and what is being solved
-    #Primary and Secondary features of quantiative approach
 
     #check diffusion model papers
 
@@ -1487,7 +1486,7 @@ if __name__ == '__main__':
         channels = config.channels,
         resnet_block_groups = config.resnet_block_groups,
         learned_variance = False,
-        learned_sinusoidal_cond = True,
+        learned_sinusoidal_cond = False,
         random_fourier_features = False,
         learned_sinusoidal_dim = 16
     )
@@ -1511,7 +1510,7 @@ if __name__ == '__main__':
         gradient_accumulate_every = 2,    # gradient accumulation steps
         results_folder = config.experiment_name + '_results',
         ema_decay = config.ema_decay,                # exponential moving average decay
-        amp = True,                       # turn on mixed precision
+        amp = False,                       # turn off mixed precision
         calculate_fid = True,              # whether to calculate fid during training (does not work with grayscale one channel data)
         save_and_sample_every = config.save_and_sample_every, # saving model and sampling images every n steps
         sampling_steps = config.sampling_timesteps,

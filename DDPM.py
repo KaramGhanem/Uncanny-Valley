@@ -959,7 +959,6 @@ class GaussianDiffusion(nn.Module):
         return loss.mean()
 
     def forward(self, img, *args, **kwargs):
-        # import pdb;pdb.set_trace()
         b, c, h, w, device, img_size, = *img.shape, img.device, self.image_size
         assert h == img_size and w == img_size, f'height and width of image must be {img_size}'
         t = torch.randint(0, self.num_timesteps, (b,), device=device).long()
@@ -1294,7 +1293,7 @@ class Trainer(object):
                 with torch.no_grad():
                     milestone = self.step // self.save_and_sample_every
                     batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
-                    import pdb;pdb.set_trace()
+                    # import pdb;pdb.set_trace()
                     all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
 
                 all_images = torch.cat(all_images_list, dim = 0)
@@ -1430,14 +1429,14 @@ if __name__ == "__main__":
         gradient_accumulate_every = 2,    # gradient accumulation steps
         results_folder = config.experiment_name + '_results',
         ema_decay = config.ema_decay,                # exponential moving average decay
-        amp = False,                       # turn on mixed precision
+        amp = False,                       # turn off mixed precision
         calculate_fid = True,              # whether to calculate fid during training (does not work with grayscale one channel data)
         save_and_sample_every = config.save_and_sample_every, # saving model and sampling images every n steps
         sampling_steps = config.sampling_timesteps,
         milestone_path = config.milestone_path,
         fls_train_path = config.fls_train_path,
         fls_test_path = config.fls_test_path,
-        num_samples = 64
+        num_samples = 10000
     )
 
     wandb.init(
@@ -1454,8 +1453,8 @@ if __name__ == "__main__":
     )   
 
     # import pdb; pdb.set_trace()
-    # trainer.sampler()
     trainer.sampler()
+    # trainer.train()
 
 
 

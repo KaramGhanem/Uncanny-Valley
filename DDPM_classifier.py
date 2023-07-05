@@ -1236,7 +1236,7 @@ class Trainer(object):
         accelerator.print('training complete')
 
     def sampler(self):
-        for i in range(4):
+        for i in range(10):
             accelerator = self.accelerator
             device = accelerator.device
 
@@ -1277,6 +1277,7 @@ class Trainer(object):
                 with torch.no_grad():
                     milestone = self.step // self.save_and_sample_every
                     batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
+                    # import pdb;pdb.set_trace()
                     all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n, cond_fn=classifier_cond_fn, guidance_kwargs={"classifier":self.classifier,"y":(torch.fill(torch.zeros(n), 1).long()).to('cuda'),"classifier_scale":1,}), batches))
 
                 all_images = torch.cat(all_images_list, dim = 0)
@@ -1284,10 +1285,10 @@ class Trainer(object):
                 results_folder_temp = Path(f"{str(self.results_folder)}/model_{i}")
                 results_folder_temp.mkdir(exist_ok = True)
 
-                for count,image in enumerate(all_images_list):
-                    for c,i in enumerate(image):
-                        utils.save_image(i, f"{str(results_folder_temp)}/sample-{milestone}-{c}.png")
+                for count,image in enumerate(all_images):
+                    utils.save_image(image, f"{str(results_folder_temp)}/sample-{i+1}-{count}.png")
 
+                #Saves images as Grid
                 #utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
 
                 # whether to calculate fid
@@ -1311,9 +1312,9 @@ class Trainer(object):
                 pbar.update(1)
 
             # np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
-            np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
-            np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
-            np.save(f"{str(self.results_folder)}/fls_score.npy", np.array(fls_score_list)) 
+            # np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
+            # np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
+            # np.save(f"{str(self.results_folder)}/fls_score.npy", np.array(fls_score_list)) 
 
             accelerator.print('sampling complete')
 
@@ -1341,8 +1342,8 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser() #check parser
     parser.add_argument("--experiment_name", type=str, default="base")
-    parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--train_lr", type=float, default=1e-4)
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--train_lr", type=float, default=10e-4)
     parser.add_argument("--train_num_steps", type=int, default=5000) 
     parser.add_argument("--loss_type", type=str, default="l1")
     parser.add_argument("--beta_schedule", type=str, default="sigmoid")
@@ -1420,7 +1421,7 @@ if __name__ == '__main__':
         gradient_accumulate_every = 2,    # gradient accumulation steps
         results_folder = config.experiment_name + '_results',
         ema_decay = config.ema_decay,                # exponential moving average decay
-        amp = True,                       # turn on mixed precision
+        amp = False,                       # turn on mixed precision
         calculate_fid = True,              # whether to calculate fid during training (does not work with grayscale one channel data)
         save_and_sample_every = config.save_and_sample_every, # saving model and sampling images every n steps
         sampling_steps = config.sampling_timesteps,
