@@ -23,7 +23,7 @@ conda activate py3.8
 #    and look for the dataset into $SLURM_TMPDIR
 #python /home/mila/k/karam.ghanem/Diffusion/minDiffusion/DDPM.py --channel 3  --save_and_sample_every 5000 --sampling_timesteps 11900 --timesteps 12000 --train_num_steps 20000 --experiment_name Langevin_Sampler_DDIM_cifar10_20k --data_path '/home/mila/k/karam.ghanem/Diffusion/cifar10_png/train' 
 
-python /home/mila/k/karam.ghanem/Diffusion/minDiffusion/DDPM.py --channel 3  --save_and_sample_every 1 --sampling_timesteps 1000 --timesteps 1000 --experiment_name Langevin_linear_0.75 --data_path '/network/scratch/k/karam.ghanem/Diffusion/minDiffusion/cifar10_png/train' --fls_train_path "/network/scratch/k/karam.ghanem/Diffusion/minDiffusion/minDiffusion/datasets_cifar_big/cifar_train" --fls_test_path "/network/scratch/k/karam.ghanem/Diffusion/minDiffusion/minDiffusion/datasets_cifar_big/cifar_test" --milestone_path "/network/scratch/k/karam.ghanem/Diffusion/minDiffusion/DDPM_linear_0.75_schedule_CIFAR10_results"
+python /network/scratch/k/karam.ghanem/Diffusion/minDiffusion/DDPM.py --channel 3  --save_and_sample_every 1 --sampling_timesteps 1000 --timesteps 1000 --experiment_name Langevin_linear_0.75 --data_path '/home/mila/k/karam.ghanem/scratch/Diffusion/cifar10_png/train' --fls_train_path "/network/scratch/k/karam.ghanem/Diffusion/minDiffusion/minDiffusion/datasets_cifar_big/cifar_train" --fls_test_path "/network/scratch/k/karam.ghanem/Diffusion/minDiffusion/minDiffusion/datasets_cifar_big/cifar_test" --milestone_path "/network/scratch/k/karam.ghanem/Diffusion/minDiffusion/DDPM_linear_0.75_schedule_CIFAR10_results"
 
 
 # 5. Copy whatever you want to save on $SCRATCH
