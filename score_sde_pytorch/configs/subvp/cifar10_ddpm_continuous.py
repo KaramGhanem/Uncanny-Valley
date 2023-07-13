@@ -14,44 +14,42 @@
 # limitations under the License.
 
 # Lint as: python3
-"""Config file for reproducing NCSNv1 on CIFAR-10."""
+"""Training DDPM with sub-VP SDE."""
 
 from configs.default_cifar10_configs import get_default_configs
 
 
 def get_config():
   config = get_default_configs()
+
   # training
   training = config.training
-  training.sde = 'vesde'
-  training.continuous = False
+  training.sde = 'subvpsde'
+  training.continuous = True
+  training.reduce_mean = True
+
   # sampling
   sampling = config.sampling
   sampling.method = 'pc'
-  sampling.predictor = 'none'
-  sampling.corrector = 'ald'
-  sampling.n_steps_each = 100
-  sampling.snr = 0.316
+  sampling.predictor = 'euler_maruyama'
+  sampling.corrector = 'none'
+
+  # data
+  data = config.data
+  data.centered = True
+
   # model
   model = config.model
-  model.name = 'ncsn'
+  model.name = 'ddpm'
   model.scale_by_sigma = False
-  model.sigma_max = 1
-  model.num_scales = 10
-  model.ema_rate = 0.
-  model.normalization = 'InstanceNorm++'
-  model.nonlinearity = 'elu'
+  model.ema_rate = 0.9999
+  model.normalization = 'GroupNorm'
+  model.nonlinearity = 'swish'
   model.nf = 128
-  model.interpolation = 'bilinear'
-  # optim
-  optim = config.optim
-  optim.weight_decay = 0
-  optim.optimizer = 'Adam'
-  optim.lr = 10e-4
-  optim.beta1 = 0.9
-  optim.amsgrad = False
-  optim.eps = 1e-8
-  optim.warmup = 0
-  optim.grad_clip = -1.
+  model.ch_mult = (1, 2, 2, 2)
+  model.num_res_blocks = 2
+  model.attn_resolutions = (16,)
+  model.resamp_with_conv = True
+  model.conditional = True
 
   return config
