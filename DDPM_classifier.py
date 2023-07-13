@@ -914,6 +914,8 @@ class Classifier(nn.Module):
         x  = x
         B = x.shape[0]
         t = t.view(B, 1)
+        self.linear_t.to(x.device)
+        self.linear_img.to(x.device)
         logits = self.linear_t(t.float()) + self.linear_img(x.view(x.shape[0], -1))
         return logits
     

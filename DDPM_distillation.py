@@ -524,7 +524,7 @@ class Unet(nn.Module):
         self_condition = False,
         resnet_block_groups = 8,
         learned_variance = False,
-        learned_sinusoidal_cond = False,
+        learned_sinusoidal_cond = True,
         random_fourier_features = False,
         learned_sinusoidal_dim = 16
     ):
@@ -1467,16 +1467,6 @@ if __name__ == "__main__":
     parser.add_argument("--milestone_path", type=str, default=" ") # will give an error if not specified
     parser.add_argument("--scaling_factor", type=float, default=1) # will give an error if not specified
     parser.add_argument("--local_rank", type=int, default=0)
-    
-    #Add attention heads
-    #Add different optimizers 
-    #Add epochs
-
-    #Unet
-    #Sampling
-    #GaussianDiffusion
-
-    #check diffusion model papers
 
     config = parser.parse_args()
 
@@ -1486,7 +1476,7 @@ if __name__ == "__main__":
         channels = config.channels,
         resnet_block_groups = config.resnet_block_groups,
         learned_variance = False,
-        learned_sinusoidal_cond = False,
+        learned_sinusoidal_cond = True,
         random_fourier_features = False,
         learned_sinusoidal_dim = 16
     )
