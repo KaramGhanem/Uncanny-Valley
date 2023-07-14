@@ -22,6 +22,7 @@ from ml_collections.config_flags import config_flags
 import logging
 import os
 import tensorflow as tf
+import wandb
 
 FLAGS = flags.FLAGS
 
@@ -36,6 +37,18 @@ flags.mark_flags_as_required(["workdir", "config", "mode"])
 
 def main(argv):
   if FLAGS.mode == "train":
+    wandb.init(
+    # set the wandb project where this run will be logged
+    project="Diffusion Models",
+    
+    # track hyperparameters and run metadata
+    config={
+    "architecture": "NCSN training",
+    # "training steps": config.train_num_steps,
+    # "sampling steps": config.sampling_timesteps,
+    # "time steps": config.timesteps
+    }
+    )  
     # Create the working directory
     tf.io.gfile.makedirs(FLAGS.workdir)
     # Set logger so that it outputs to both console and file
@@ -51,6 +64,19 @@ def main(argv):
     run_lib.train(FLAGS.config, FLAGS.workdir)
   elif FLAGS.mode == "eval":
     # Run the evaluation pipeline
+
+    wandb.init(
+    # set the wandb project where this run will be logged
+    project="Diffusion Models",
+    
+    # track hyperparameters and run metadata
+    config={
+    "architecture": "NCSN Sampling",
+    # "training steps": config.train_num_steps,
+    # "sampling steps": config.sampling_timesteps,
+    # "time steps": config.timesteps
+    }
+    )   
     run_lib.evaluate(FLAGS.config, FLAGS.workdir, FLAGS.eval_folder)
   else:
     raise ValueError(f"Mode {FLAGS.mode} not recognized.")
