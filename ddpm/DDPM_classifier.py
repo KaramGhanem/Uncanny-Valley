@@ -1408,7 +1408,9 @@ if __name__ == '__main__':
         p2_loss_weight_gamma = config.p2_loss_weight_gamma, # p2 loss weight, from https://arxiv.org/abs/2204.00227 - 0 is equivalent to weight of 1 across time - 1. is recommended
         p2_loss_weight_k = config.p2_loss_weight_k,
         ddim_sampling_eta = config.ddim_sampling_eta,
-        auto_normalize = True
+        auto_normalize = True,
+        linear_schedule_scale = config.scaling_factor,
+        dropout = 0.13
     )
 
     classifier = Classifier(image_size=image_size, num_classes=10, t_dim=1) 
