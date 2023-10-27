@@ -477,7 +477,8 @@ class Unet(nn.Module):
         learned_variance = False,
         learned_sinusoidal_cond = False,
         random_fourier_features = False,
-        learned_sinusoidal_dim = 16
+        learned_sinusoidal_dim = 16,
+        dropout = 0
     ):
         super().__init__()
 
@@ -485,6 +486,10 @@ class Unet(nn.Module):
 
         self.channels = channels
         self.self_condition = self_condition
+        self.dropout = dropout
+        if self.dropout != 0:
+            self.training = True
+
         input_channels = channels * (2 if self_condition else 1)
 
         init_dim = default(init_dim, dim)
@@ -557,7 +562,8 @@ class Unet(nn.Module):
             x_self_cond = default(x_self_cond, lambda: torch.zeros_like(x))
             x = torch.cat((x_self_cond, x), dim = 1)
 
-        x = self.init_conv(x)
+        # x = self.init_conv(x)
+        x = self.init_conv(torch.nn.functional.dropout(x, p=self.dropout, training=self.training))
         r = x.clone()
 
         t = self.time_mlp(time)
@@ -1400,7 +1406,8 @@ if __name__ == "__main__":
         learned_variance = False,
         learned_sinusoidal_cond = False,
         random_fourier_features = False,
-        learned_sinusoidal_dim = 16
+        learned_sinusoidal_dim = 16,
+        dropout = 0.13
     )
 
     ddpm = GaussianDiffusion(

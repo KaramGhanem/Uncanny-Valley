@@ -612,11 +612,10 @@ def extract(a, t, x_shape):
     out = a.gather(-1, t)
     return out.reshape(b, *((1,) * (len(x_shape) - 1)))
 
-def linear_beta_schedule(timesteps):
+def linear_beta_schedule(timesteps, scale = 1):
     """
     linear schedule, proposed in original ddpm paper
     """
-    scale = 1000 / timesteps
     beta_start = scale * 0.0001
     beta_end = scale * 0.02
     return torch.linspace(beta_start, beta_end, timesteps, dtype = torch.float64)
@@ -1270,7 +1269,7 @@ class Trainer(object):
         accelerator.print('training complete')
     
     def sampler(self):
-        for i in range(4):
+        for i in range(10):
             accelerator = self.accelerator
             device = accelerator.device
 
@@ -1432,7 +1431,7 @@ if __name__ == "__main__":
         p2_loss_weight_k = config.p2_loss_weight_k,
         ddim_sampling_eta = config.ddim_sampling_eta,
         auto_normalize = True,
-        linear_schedule_scale = 1
+        linear_schedule_scale = config.scaling_factor
     )
 
     trainer = Trainer(
