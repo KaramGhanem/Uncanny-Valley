@@ -39,7 +39,7 @@ conda activate edm
 #    --nproc_per_node=1\
 #     train.py --outdir=training-runs --data=/home/mila/k/karam.ghanem/scratch/datasets/cifar10/cifar10-32x32.zip --cond=1 --arch=ddpmpp --batch-gpu=32
 
-# python dataset_tool.py --source=/home/mila/k/karam.ghanem/scratch/datasets/imagenet_train_train --dest=/home/mila/k/karam.ghanem/scratch/datasets/imagenet-64x64.zip --resolution=64x64 --transform=center-crop
+#  python /home/mila/k/karam.ghanem/scratch/Diffusion/minDiffusion/edm/dataset_tool.py --source=/network/datasets/imagenet.var/imagenet_torchvision/train --dest=/home/mila/k/karam.ghanem/scratch/datasets/imagenet/imagenet-64x64.zip --resolution=64x64 --transform=center-crop
 
 python fid.py ref --data=/home/mila/k/karam.ghanem/scratch/datasets/imagenet-64x64.zip --dest=/home/mila/k/karam.ghanem/scratch/datasets/imagenet-64x64.npz
 
