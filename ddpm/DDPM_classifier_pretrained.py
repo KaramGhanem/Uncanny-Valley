@@ -748,41 +748,88 @@ class GaussianDiffusion(nn.Module):
 
         ret = self.unnormalize(ret)
         return ret
-
+    
     @torch.no_grad()
     def ddim_sample(self, shape, return_all_timesteps = False, cond_fn=None, guidance_kwargs=None):
-        batch, device, total_timesteps, sampling_timesteps, eta, objective = shape[0], self.betas.device, self.num_timesteps, self.sampling_timesteps, self.ddim_sampling_eta, self.objective
-        times = torch.linspace(-1, total_timesteps - 1, steps = sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
-        times = list(reversed(times.int().tolist()))
-        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
+        if cond_fn is None:  
+            batch, device, total_timesteps, sampling_timesteps, eta, objective = shape[0], self.betas.device, self.num_timesteps, self.sampling_timesteps, self.ddim_sampling_eta, self.objective
+            times = torch.linspace(-1, total_timesteps - 1, steps = sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
+            times = list(reversed(times.int().tolist()))
+            time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
+
+            img = torch.randn(shape, device = device)
+            imgs = [img]
+
+            x_start = None
+
+            for time, time_next in tqdm(time_pairs, desc = 'sampling loop time step'):
+                time_cond = torch.full((batch,), time, device = device, dtype = torch.long)
+                self_cond = x_start if self.self_condition else None
+                pred_noise, x_start, *_ = self.model_predictions(img, time_cond, self_cond, clip_x_start = True)
+
+                imgs.append(img)
+
+                if time_next < 0:
+                    img = x_start
+                    continue
+
+                alpha = self.alphas_cumprod[time]
+                alpha_next = self.alphas_cumprod[time_next]
+
+                sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
+                c = (1 - alpha_next - sigma ** 2).sqrt()
+
+                noise = torch.randn_like(img)
+
+                img = x_start * alpha_next.sqrt() + \
+                    c * pred_noise + \
+                    sigma * noise
+            ret = img if not return_all_timesteps else torch.stack(imgs, dim = 1)
+
+            ret = self.unnormalize(ret)
+        return ret
+    
+    def condition_score(self, cond_fn, p_mean_var, x, t, guidance_kwargs=None):
+        """
+        Compute what the p_mean_variance output would have been, should the
+        model's score function be conditioned by cond_fn.
+        """
+        alpha_bar = extract(self.alphas_cumprod, t, x.shape)
+
+        eps = self.predict_noise_from_start(x, t, p_mean_var['pred_x_start'])
+        eps = eps - (1 - alpha_bar).sqrt() * cond_fn(x, t, **guidance_kwargs)
+
+        out = p_mean_var.copy()
+        out['pred_x_start'] = self.predict_start_from_noise(x, t, eps)
+        model_mean, _, _ = self.q_posterior(x_start=out['pred_x_start'], x_t=x, t=t)
+        return model_mean, out['pred_x_start']
+        
+    @torch.no_grad()
+    def ddim_sample_cond_fn(self, x, t, x_self_cond=None, cond_fn=None, guidance_kwargs=None):
+        b, *_, device = *x.shape, x.device
+        batched_times = torch.full((b,), t, device=device, dtype=torch.long)
+        model_mean, model_variance, model_log_variance, x_start = self.p_mean_variance(
+            x=x, t=batched_times, x_self_cond=x_self_cond, clip_denoised=True
+        )
+
+        model_mean, x_start = self.condition_score(cond_fn, {'mean': model_mean, 'variance': model_variance, 'log_variance': model_log_variance, 'pred_x_start': x_start}, x, batched_times, guidance_kwargs)
+
+        noise = torch.randn_like(x) if t > 0 else 0.  # no noise if t == 0
+        pred_img = model_mean + (0.5 * model_log_variance).exp() * noise
+        return pred_img, x_start
+    
+    def ddim_sample_loop(self, shape, return_all_timesteps = False, cond_fn=None, guidance_kwargs=None):
+        batch, device = shape[0], self.betas.device
 
         img = torch.randn(shape, device = device)
         imgs = [img]
 
         x_start = None
 
-        for time, time_next in tqdm(time_pairs, desc = 'sampling loop time step'):
-            time_cond = torch.full((batch,), time, device = device, dtype = torch.long)
+        for t in tqdm(reversed(range(0, self.num_timesteps)), desc = 'sampling loop time step', total = self.num_timesteps):
             self_cond = x_start if self.self_condition else None
-            pred_noise, x_start, *_ = self.model_predictions(img, time_cond, self_cond, clip_x_start = True)
-
+            img, x_start = self.ddim_sample_cond_fn(img, t, self_cond, cond_fn, guidance_kwargs)
             imgs.append(img)
-
-            if time_next < 0:
-                img = x_start
-                continue
-
-            alpha = self.alphas_cumprod[time]
-            alpha_next = self.alphas_cumprod[time_next]
-
-            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
-            c = (1 - alpha_next - sigma ** 2).sqrt()
-
-            noise = torch.randn_like(img)
-
-            img = x_start * alpha_next.sqrt() + \
-                  c * pred_noise + \
-                  sigma * noise
 
         ret = img if not return_all_timesteps else torch.stack(imgs, dim = 1)
 
@@ -792,7 +839,7 @@ class GaussianDiffusion(nn.Module):
     @torch.no_grad()
     def sample(self, batch_size = 16, return_all_timesteps = False, cond_fn=None, guidance_kwargs=None):
         image_size, channels = self.image_size, self.channels
-        sample_fn = self.p_sample_loop if not self.is_ddim_sampling else self.ddim_sample
+        sample_fn = self.p_sample_loop if not self.is_ddim_sampling else self.ddim_sample_loop
         return sample_fn((batch_size, channels, image_size, image_size), return_all_timesteps = return_all_timesteps, cond_fn=cond_fn, guidance_kwargs=guidance_kwargs)
 
     @torch.no_grad()
@@ -1235,7 +1282,7 @@ class Trainer(object):
                         with torch.no_grad():
                             milestone = self.step // self.save_and_sample_every
                             batches = num_to_groups(self.num_samples, self.batch_size) # num_to_groups(self.num_samples, self.batch_size)
-                            all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n, cond_fn=classifier_cond_fn, guidance_kwargs={"classifier":self.classifier,"y":torch.fill(torch.zeros(n), 1).long(),"classifier_scale":1,}), batches))
+                            all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n, cond_fn=classifier_cond_fn, guidance_kwargs={"classifier":self.classifier,"y":torch.fill(torch.zeros(n), 1).long(),"classifier_scale":10,}), batches))
                         all_images = torch.cat(all_images_list, dim = 0)
                         
                         results_folder_temp = Path(f"{str(self.results_folder)}/{milestone}-folder")
