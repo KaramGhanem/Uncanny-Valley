@@ -771,11 +771,58 @@ class GaussianDiffusion(nn.Module):
 
         ret = self.unnormalize(ret)
         return ret
+    
+    def condition_score(self, cond_fn, p_mean_var, x, t, guidance_kwargs=None):
+        """
+        Compute what the p_mean_variance output would have been, should the
+        model's score function be conditioned by cond_fn.
+        """
+        alpha_bar = extract(self.alphas_cumprod, t, x.shape)
 
+        eps = self.predict_noise_from_start(x, t, p_mean_var['pred_x_start'])
+        eps = eps - (1 - alpha_bar).sqrt() * cond_fn(x, t, **guidance_kwargs)
+
+        out = p_mean_var.copy()
+        out['pred_x_start'] = self.predict_start_from_noise(x, t, eps)
+        model_mean, _, _ = self.q_posterior(x_start=out['pred_x_start'], x_t=x, t=t)
+        return model_mean, out['pred_x_start']
+        
+    @torch.no_grad()
+    def ddim_sample_cond_fn(self, x, t, x_self_cond=None, cond_fn=None, guidance_kwargs=None):
+        b, *_, device = *x.shape, x.device
+        batched_times = torch.full((b,), t, device=device, dtype=torch.long)
+        model_mean, model_variance, model_log_variance, x_start = self.p_mean_variance(
+            x=x, t=batched_times, x_self_cond=x_self_cond, clip_denoised=True
+        )
+
+        model_mean, x_start = self.condition_score(cond_fn, {'mean': model_mean, 'variance': model_variance, 'log_variance': model_log_variance, 'pred_x_start': x_start}, x, batched_times, guidance_kwargs)
+
+        noise = torch.randn_like(x) if t > 0 else 0.  # no noise if t == 0
+        pred_img = model_mean + (0.5 * model_log_variance).exp() * noise
+        return pred_img, x_start
+    
+    def ddim_sample_loop(self, shape, return_all_timesteps = False, cond_fn=None, guidance_kwargs=None):
+        batch, device = shape[0], self.betas.device
+
+        img = torch.randn(shape, device = device)
+        imgs = [img]
+
+        x_start = None
+
+        for t in tqdm(reversed(range(0, self.num_timesteps)), desc = 'sampling loop time step', total = self.num_timesteps):
+            self_cond = x_start if self.self_condition else None
+            img, x_start = self.ddim_sample_cond_fn(img, t, self_cond, cond_fn, guidance_kwargs)
+            imgs.append(img)
+
+        ret = img if not return_all_timesteps else torch.stack(imgs, dim = 1)
+
+        ret = self.unnormalize(ret)
+        return ret
+    
     @torch.no_grad()
     def sample(self, batch_size = 16, return_all_timesteps = False, cond_fn=None, guidance_kwargs=None):
         image_size, channels = self.image_size, self.channels
-        sample_fn = self.p_sample_loop if not self.is_ddim_sampling else self.ddim_sample
+        sample_fn = self.p_sample_loop if not self.is_ddim_sampling else self.ddim_sample_loop
         return sample_fn((batch_size, channels, image_size, image_size), return_all_timesteps = return_all_timesteps, cond_fn=cond_fn, guidance_kwargs=guidance_kwargs)
 
     @torch.no_grad()
@@ -1238,7 +1285,7 @@ class Trainer(object):
         accelerator.print('training complete')
 
     def sampler(self):
-        for i in range(10):
+        for i in range(2,10):
             accelerator = self.accelerator
             device = accelerator.device
 
@@ -1408,9 +1455,7 @@ if __name__ == '__main__':
         p2_loss_weight_gamma = config.p2_loss_weight_gamma, # p2 loss weight, from https://arxiv.org/abs/2204.00227 - 0 is equivalent to weight of 1 across time - 1. is recommended
         p2_loss_weight_k = config.p2_loss_weight_k,
         ddim_sampling_eta = config.ddim_sampling_eta,
-        auto_normalize = True,
-        linear_schedule_scale = config.scaling_factor,
-        dropout = 0.13
+        auto_normalize = True
     )
 
     classifier = Classifier(image_size=image_size, num_classes=10, t_dim=1) 
