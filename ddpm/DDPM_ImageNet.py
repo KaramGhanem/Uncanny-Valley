@@ -1,13 +1,3 @@
-"""
-Extremely Minimalistic Implementation of DDPM
-
-https://arxiv.org/abs/2006.11239
-
-Everything is self contained. (Except for pytorch and torchvision... of course)
-
-run it with `python superminddpm.py`
-"""
-
 from typing import Dict, Tuple
 from tqdm import tqdm
 
@@ -61,20 +51,6 @@ import json
 import wandb
 import pickle
 
-# from math import floor
-# from numpy import ones
-# from numpy import expand_dims
-# from numpy import log
-# from numpy import mean
-# from numpy import std
-# from numpy import exp
-# from numpy.random import shuffle
-# from keras.applications.inception_v3 import InceptionV3 as InceptionV3_
-# from keras.applications.inception_v3 import preprocess_input
-# from keras.datasets import cifar10
-# from skimage.transform import resize
-# from numpy import asarray
-
 
 import torch
 from torch import nn
@@ -99,82 +75,12 @@ ModelPrediction =  namedtuple('ModelPrediction', ['pred_noise', 'pred_x_start'])
 
 # helpers functions
 
-def get_logger(model):
-  logger = dict()
-#   logger['train_time'] = [0]
-#   logger['eval_time'] = [0]
-#   logger['train_losses'] = []
-#   logger['GPU_Usage'] = []
-  logger['FID'] = []
-  #logger['parameters'] = sum([p.numel() for p in model.back_bone.parameters() if p.requires_grad])
-  return logger
-
-def put_in_dictionary(FID):
-#   logger["total_train_loss"] = train_loss
-#   logger["total_train_time"] = train_time
-#   logger["final_eval_loss"] = eval_loss
-#   logger['train_time'] = logger['train_time'][1:]
-#   logger['eval_time'] = logger['eval_time'][1:]
-    logger["FID"] = FID
-
 def save_logs(dictionary, log_dir, exp_id):
   log_dir = os.path.join(log_dir, exp_id)
   os.makedirs(log_dir, exist_ok=True)
   # Log arguments
   with open(os.path.join(log_dir, "args.json"), "w") as f:
     json.dump(dictionary, f, indent=2)
-
-# ##Inception Score
-# # scale an array of images to a new size
-# def scale_images(images, new_shape):
-#   images_list = list()
-#   for image in images:
-#       # resize with nearest neighbor interpolation
-#       new_image = resize(image, new_shape, 0)
-#       # store
-#       images_list.append(new_image)
-#   return asarray(images_list)
-
-# # assumes images have any shape and pixels in [0,255]
-# def inception_score(images, n_split=10, eps=1E-16):
-#   # load inception v3 model
-#   model = InceptionV3_()
-#   # enumerate splits of images/predictions
-#   scores = list()
-#   n_part = floor(images.shape[0] / n_split)
-#   for i in range(n_split):
-#       # retrieve images
-#       ix_start, ix_end = i * n_part, (i+1) * n_part
-#       subset = images[ix_start:ix_end]
-#       # convert from uint8 to float32
-#       #subset = subset.astype('float32')
-#       # scale images to the required size
-#       subset = scale_images(subset, (299,299,3))
-#       # pre-process images, scale to [-1,1]
-#       subset = preprocess_input(subset)
-#       # predict p(y|x)
-#       p_yx = model.predict(subset)
-#       # calculate p(y)
-#       p_y = expand_dims(p_yx.mean(axis=0), 0)
-#       # calculate KL divergence using log probabilities
-#       kl_d = p_yx * (log(p_yx + eps) - log(p_y + eps))
-#       # sum over classes
-#       sum_kl_d = kl_d.sum(axis=1)
-#       # average over images
-#       avg_kl_d = mean(sum_kl_d)
-#       # undo the log
-#       is_score = exp(avg_kl_d)
-#       # store
-#       scores.append(is_score)
-#   # average across images
-#   is_avg, is_std = mean(scores), std(scores)
-#   return is_avg, is_std
-
-# def collate_fn(batch):
-#   return {
-#       'pixel_values': torch.stack([x['pixel_values'] for x in batch]),
-#       'labels': torch.tensor([x['labels'] for x in batch])
-# }
 
 
 def inception_score(imgs, cuda=True, batch_size=32, resize=False, splits=1):
@@ -568,7 +474,6 @@ class Unet(nn.Module):
             x_self_cond = default(x_self_cond, lambda: torch.zeros_like(x))
             x = torch.cat((x_self_cond, x), dim = 1)
 
-        #x = self.init_conv(x)
         x = self.init_conv(torch.nn.functional.dropout(x, p=self.dropout, training=self.training))
 
         r = x.clone()
@@ -1242,24 +1147,6 @@ class Trainer(object):
                         # utils.save_image(all_images, f"{str(self.results_folder)}/sample-{milestone}.png", nrow = int(math.sqrt(self.num_samples)))
                         self.save(milestone)
 
-
-                        # # whether to calculate fid
-
-                        # if exists(self.inception_v3):
-                        #     fid_score = self.fid_score(real_samples = data, fake_samples = all_images)
-                        #     inception_score_val = inception_score(all_images, cuda=True, batch_size=16, resize=True, splits=10)
-                        #     fls_score = compute_metrics(train=self.fls_train_path, test=self.fls_test_path, gen=f"{str(self.results_folder)}/{milestone}-folder")
-                        #     accelerator.print(f'fid_score: {fid_score}')
-                        #     accelerator.print(f'inception_score: {inception_score_val}')
-                        #     accelerator.print(f'fls_score: {fls_score}')
-                        #     wandb.log({"fid_score": fid_score})
-                        #     wandb.log({"inception_score_mean": inception_score_val[0]})
-                        #     wandb.log({"inception_score_std": inception_score_val[1]})
-                        #     wandb.log({"fls_score": fls_score})
-                        #     fid_score_list.append(fid_score)
-                        #     inception_score_list.append(inception_score_val)
-                        #     fls_score_list.append(fls_score)
-
                 pbar.update(1)
 
         # np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
@@ -1354,22 +1241,6 @@ class Trainer(object):
 
 if __name__ == "__main__":
 
-    ## Commands to set environment variable in terminal as to get local MPS GPU to work
-    ## Some torch functions are not fully compatible with MPS GPU 
-    ## If error appears, run in terminal
-
-    ## Use in terminal when asked to set PYTORCH_ENABLE_MPS_FALLBACK=1
-
-    # !echo $HOME
-    # !echo $USER
-    # !PYTORCH_ENABLE_MPS_FALLBACK=1
-    # !echo $PYTORCH_ENABLE_MPS_FALLBACK
-    # !echo $SHELL
-    # !echo "export PYTORCH_ENABLE_MPS_FALLBACK=1" >> ~/.zshrc    
-    # !cat ~/.zshrc   
-    # !source ~/.zshrc 
-    # !printenv  
-    # !env | grep "PYTORCH_ENABLE_MPS_FALLBACK" 
 
     parser = argparse.ArgumentParser() #check parser
     parser.add_argument("--experiment_name", type=str, default="base")
@@ -1396,14 +1267,6 @@ if __name__ == "__main__":
     parser.add_argument("--milestone_path", type=str, default=" ") # will give an error if not specified
     parser.add_argument("--scaling_factor", type=float, default=1) # will give an error if not specified
     parser.add_argument("--local_rank", type=int, default=0)
-    #Add attention heads
-    #Add different optimizers 
-    #Add epochs
-
-    #Unet
-    #Sampling
-    #GaussianDiffusion
-
     config = parser.parse_args()
 
     model = Unet(
