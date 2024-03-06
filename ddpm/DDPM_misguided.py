@@ -48,7 +48,6 @@ from scipy.stats import entropy
 
 import wandb
 
-# from denoising_diffusion_pytorch.version import __version__
 
 # constants
 
@@ -1337,11 +1336,6 @@ class Trainer(object):
                 for count,image in enumerate(all_images):
                     utils.save_image(image, f"{str(results_folder_temp)}/sample-{i+1}-{count}.png")
 
-                #Saves images as Grid
-                #utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
-
-                # whether to calculate fid
-
                 if exists(self.inception_v3):
                     # fid_score = self.fid_score(real_samples = data_real, fake_samples = all_images)
                     inception_score_val = inception_score(all_images, cuda=True, batch_size=16, resize=True, splits=10)
@@ -1360,34 +1354,12 @@ class Trainer(object):
 
                 pbar.update(1)
 
-            # np.save(f"{str(self.results_folder)}/fid_score.npy", np.array(fid_score_list)) 
-            # np.save(f"{str(self.results_folder)}/loss.npy", np.array(loss_list)) 
-            # np.save(f"{str(self.results_folder)}/inception_score.npy", np.array(inception_score_list)) 
-            # np.save(f"{str(self.results_folder)}/fls_score.npy", np.array(fls_score_list)) 
-
             accelerator.print('sampling complete')
 
         
         
 
 if __name__ == '__main__':
-
-    ## Commands to set environment variable in terminal as to get local MPS GPU to work
-    ## Some torch functions are not fully compatible with MPS GPU 
-    ## If error appears, run in terminal
-
-    ## Use in terminal when asked to set PYTORCH_ENABLE_MPS_FALLBACK=1
-
-    # !echo $HOME
-    # !echo $USER
-    # !PYTORCH_ENABLE_MPS_FALLBACK=1
-    # !echo $PYTORCH_ENABLE_MPS_FALLBACK
-    # !echo $SHELL
-    # !echo "export PYTORCH_ENABLE_MPS_FALLBACK=1" >> ~/.zshrc    
-    # !cat ~/.zshrc   
-    # !source ~/.zshrc 
-    # !printenv  
-    # !env | grep "PYTORCH_ENABLE_MPS_FALLBACK" 
 
     parser = argparse.ArgumentParser() #check parser
     parser.add_argument("--experiment_name", type=str, default="base")
@@ -1412,21 +1384,6 @@ if __name__ == '__main__':
     parser.add_argument("--fls_train_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_train")
     parser.add_argument("--fls_test_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_test")
     parser.add_argument("--milestone_path", type=str, default=" ") # will give an error if not specified
-    
-    #Add attention heads
-    #Add different optimizers 
-    #Add epochs
-
-    #Unet
-    #Sampling
-    #GaussianDiffusion
-    #parameterization
-
-    #batch size and the optimizer are solver, not decisive for what were investigating 
-    #Understand the difference between the solver and what is being solved
-    #Primary and Secondary features of quantiative approach
-
-    #check diffusion model papers
 
     config = parser.parse_args()
 
@@ -1495,13 +1452,3 @@ if __name__ == '__main__':
 
     trainer.sampler()
 
-    # sampled_images = diffusion.sample(
-    #     batch_size = batch_size,
-    #     cond_fn=classifier_cond_fn, 
-    #     guidance_kwargs={
-    #         "classifier":classifier,
-    #         "y":torch.fill(torch.zeros(batch_size), 1).long(),
-    #         "classifier_scale":1,
-    #     }
-    # )
-    # sampled_images.shape # (4, 3, 128, 128)
