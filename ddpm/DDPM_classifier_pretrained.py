@@ -1461,21 +1461,8 @@ if __name__ == '__main__':
     parser.add_argument("--fls_train_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_train")
     parser.add_argument("--fls_test_path", type=str, default="/home/mila/k/karam.ghanem/Diffusion/minDiffusion/datasets_cifar/cifar_test")
     parser.add_argument("--milestone_path", type=str, default=" ") # will give an error if not specified
-    
-    #Add attention heads
-    #Add different optimizers 
-    #Add epochs
 
-    #Unet
-    #Sampling
-    #GaussianDiffusion
-    #parameterization
 
-    #batch size and the optimizer are solver, not decisive for what were investigating 
-    #Understand the difference between the solver and what is being solved
-    #Primary and Secondary features of quantiative approach
-
-    #check diffusion model papers
 
     config = parser.parse_args()
 
@@ -1556,14 +1543,3 @@ if __name__ == '__main__':
     )   
 
     trainer.sampler()
-
-    # sampled_images = diffusion.sample(
-    #     batch_size = batch_size,
-    #     cond_fn=classifier_cond_fn, 
-    #     guidance_kwargs={
-    #         "classifier":classifier,
-    #         "y":torch.fill(torch.zeros(batch_size), 1).long(),
-    #         "classifier_scale":1,
-    #     }
-    # )
-    # sampled_images.shape # (4, 3, 128, 128)
